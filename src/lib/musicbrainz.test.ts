@@ -2,14 +2,52 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   MusicBrainzClient,
   automaticMatch,
+  buildEditionsUrl,
   buildSearchUrl,
   catalogSimilarity,
+  chooseCanonicalEdition,
   coverMetadataUrlFor,
   coverUrlFor,
   escapeLucene,
   mapCoverArtResponse,
+  mapEditionResponse,
   mapMusicBrainzResults,
 } from './musicbrainz'
+
+describe('MusicBrainz editions', () => {
+  const tracks = (prefix: string, count: number) => Array.from({ length: count }, (_, index) => ({ id: `${prefix}-${index}`, position: index + 1, title: `${prefix} Track ${index + 1}` }))
+
+  it('maps distinct release tracklists and chooses a likely standard official edition', () => {
+    const result = mapEditionResponse({
+      'release-count': 3,
+      'release-offset': 0,
+      releases: [
+        { id: 'standard', title: 'Album', status: 'Official', date: '2000-01-01', media: [{ position: 1, format: 'CD', tracks: tracks('standard', 10) }] },
+        { id: 'deluxe', title: 'Album (Deluxe Edition)', status: 'Official', date: '2020-01-01', media: [{ position: 1, tracks: tracks('deluxe', 12) }] },
+        { id: 'reissue', title: 'Album', status: 'Official', date: '2005-01-01', media: [{ position: 1, tracks: tracks('reissue', 10) }] },
+      ],
+    }, 'group')
+    expect(result.editions).toHaveLength(3)
+    expect(result.editions.find((edition) => edition.id === 'standard')?.tracks[0]).toMatchObject({ title: 'standard Track 1', position: 1, mediumPosition: 1 })
+    expect(chooseCanonicalEdition(result.editions)?.id).toBe('standard')
+    expect(result.hasMore).toBe(false)
+  })
+
+  it('uses a paged release browse request, the shared throttle, and a 30-day cache', async () => {
+    let clock = 0
+    const waits: number[] = []
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => String(input).includes('/release?')
+      ? response({ 'release-count': 1, 'release-offset': 0, releases: [{ id: 'edition', title: 'Album', status: 'Official', media: [{ tracks: tracks('edition', 2) }] }] })
+      : response(exactPayload)) as unknown as typeof fetch
+    const client = new MusicBrainzClient({ fetchImpl, storage: memoryStorage(), now: () => clock, wait: async (milliseconds) => { waits.push(milliseconds); clock += milliseconds } })
+    await client.search('Blue Train', 'John Coltrane', true)
+    await expect(client.editions('group')).resolves.toMatchObject({ editions: [{ id: 'edition', trackCount: 2 }] })
+    await client.editions('group')
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+    expect(waits).toContain(1_100)
+    expect(buildEditionsUrl('group', 10)).toContain('offset=10')
+  })
+})
 
 const exactPayload = {
   'release-groups': [

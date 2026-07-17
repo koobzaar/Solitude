@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { BattleDecision, RankingMode } from './types'
-import { balancedWorstCaseCount, battleCount, getBattleState, quickSchedule, seededShuffle, thoroughSchedule } from './ranking'
+import { balancedBudget, balancedWorstCaseCount, battleCount, fitBradleyTerry, getBattleState, quickSchedule, seededShuffle, thoroughSchedule } from './ranking'
 
 function playToEnd(mode: RankingMode, albumIds: string[], seed: number, initial: BattleDecision[] = []) {
   const decisions = [...initial]
@@ -20,8 +20,9 @@ describe('ranking schedules', () => {
     expect(battleCount('quick', 3)).toBe(3)
     expect(battleCount('quick', 5)).toBe(6)
     expect(battleCount('quick', 6)).toBe(9)
-    expect(battleCount('balanced', 5)).toBe(8)
+    expect(battleCount('balanced', 5)).toBe(10)
     expect(balancedWorstCaseCount(100)).toBe(573)
+    expect(balancedBudget(100)).toBe(593)
     expect(battleCount('thorough', 100)).toBe(4_950)
   })
 
@@ -64,11 +65,33 @@ describe('ranking schedules', () => {
     expect(getBattleState('thorough', ids, 77, decisions).ranking).toEqual(seededShuffle(ids, 77))
   })
 
+  it('recovers known strength and keeps cyclic evidence finite', () => {
+    const ids = ['strong', 'middle', 'weak']
+    const decisions: BattleDecision[] = [
+      ['strong', 'middle'], ['strong', 'weak'], ['middle', 'weak'],
+      ['strong', 'middle'], ['strong', 'weak'], ['middle', 'weak'],
+    ].map(([winnerId, loserId], index) => ({ winnerId, loserId, chosenAt: new Date(index).toISOString(), durationMs: 1_000 }))
+    const scores = fitBradleyTerry(ids, decisions)
+    expect(scores.strong).toBeGreaterThan(scores.middle)
+    expect(scores.middle).toBeGreaterThan(scores.weak)
+    expect(Object.values(scores).reduce((sum, score) => sum + score, 0)).toBeCloseTo(0, 10)
+
+    const cycle = fitBradleyTerry(ids, [
+      { winnerId: 'strong', loserId: 'middle', chosenAt: '', durationMs: 1 },
+      { winnerId: 'middle', loserId: 'weak', chosenAt: '', durationMs: 1 },
+      { winnerId: 'weak', loserId: 'strong', chosenAt: '', durationMs: 1 },
+    ])
+    expect(Object.values(cycle).every(Number.isFinite)).toBe(true)
+    expect(Object.values(cycle).every((score) => Math.abs(score) < 1e-8)).toBe(true)
+  })
+
   it('handles large balanced and thorough lists without duplicate matchups', () => {
     const ids = Array.from({ length: 60 }, (_, index) => String(index))
     const pairs = thoroughSchedule(ids, 11)
     expect(pairs).toHaveLength(1_770)
     expect(new Set(pairs.map((pair) => [...pair].sort().join(':'))).size).toBe(1_770)
-    expect(playToEnd('balanced', ids, 11).decisions.length).toBeLessThanOrEqual(balancedWorstCaseCount(60))
+    const balanced = playToEnd('balanced', ids, 11).decisions
+    expect(balanced).toHaveLength(balancedBudget(60))
+    expect(new Set(balanced.map((decision) => [decision.winnerId, decision.loserId].sort().join(':'))).size).toBe(balanced.length)
   })
 })

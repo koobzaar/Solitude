@@ -34,21 +34,60 @@ describe('Solitude app flow', () => {
     expect(stored.collections[0].activeRun).toBeUndefined()
   })
 
-  it('returns to the library after reload and offers an exact Resume action', async () => {
+  it('locks utilities during animation, then Undo restores an immediately usable matchup', async () => {
     const user = await reachBattle('A - Artist A\nB - Artist B\nC - Artist C')
-    fireEvent.keyDown(window, { key: '1' })
-    await user.click(screen.getByRole('button', { name: /save & exit/i }))
-    expect(await screen.findByRole('button', { name: /resume/i })).toBeInTheDocument()
+    const originalMatchup = document.querySelector('.battle-page .sr-only')?.textContent
+    await user.click(document.querySelectorAll<HTMLButtonElement>('.choice-card')[0])
+    expect(screen.getByRole('button', { name: /undo/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /restart/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /save & exit/i })).toBeDisabled()
+    await waitFor(() => expect(document.querySelector('.battle-progress__labels span')?.textContent).toContain('Battle 2'))
 
+    await user.click(screen.getByRole('button', { name: /undo/i }))
+    await waitFor(() => expect(document.querySelector('.battle-progress__labels span')?.textContent).toContain('Battle 1'))
+    expect(document.querySelector('.battle-page .sr-only')?.textContent).toBe(originalMatchup)
+    fireEvent.keyDown(window, { key: 'ArrowRight' })
+    await waitFor(() => expect(document.querySelector('.battle-progress__labels span')?.textContent).toContain('Battle 2'))
+  })
+
+  it('restores the exact active battle after a same-tab reload and still supports Save & exit', async () => {
+    await reachBattle('A - Artist A\nB - Artist B\nC - Artist C')
+    fireEvent.keyDown(window, { key: '1' })
     await waitFor(() => expect(JSON.parse(localStorage.getItem(DATA_STORAGE_KEY) ?? '{}').collections[0].activeRun.decisions).toHaveLength(1))
-    // Testing Library cleanup simulates a full page reload while localStorage remains intact.
     cleanup()
     render(<App />)
 
-    const resume = await screen.findByRole('button', { name: /resume/i })
-    await user.click(resume)
     await screen.findByRole('heading', { name: /which record comes first/i })
     expect(document.querySelector('.battle-progress__labels span')?.textContent).toContain('Battle 2')
+
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: /save & exit/i }))
+    const resume = await screen.findByRole('button', { name: /resume/i })
+    await user.click(resume)
+    expect(await screen.findByRole('heading', { name: /which record comes first/i })).toBeInTheDocument()
+  })
+
+  it('keeps song review optional and builds Record value from manual summaries', async () => {
+    const user = await reachBattle('A - Artist A\nB - Artist B')
+    fireEvent.keyDown(window, { key: 'ArrowLeft' })
+    expect(await screen.findByRole('heading', { name: /your next record is clear/i })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /go deeper with the songs/i })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /review the songs/i }))
+    expect(await screen.findByRole('heading', { name: /keep the songs that stay with you/i })).toBeInTheDocument()
+    await user.type(screen.getByLabelText(/total tracks/i), '10')
+    await user.type(screen.getByLabelText(/liked tracks/i), '4')
+    await user.type(screen.getByLabelText(/loved tracks/i), '2')
+    await user.click(screen.getByRole('button', { name: /save & next album/i }))
+    await user.click(screen.getByRole('button', { name: /skip unheard album/i }))
+
+    expect(await screen.findByRole('tab', { name: /record value/i })).toBeInTheDocument()
+    await user.click(screen.getByRole('tab', { name: /record value/i }))
+    expect(screen.getByRole('heading', { name: /not reviewed/i })).toBeInTheDocument()
+    await waitFor(() => {
+      const stored = JSON.parse(localStorage.getItem(DATA_STORAGE_KEY) ?? '{}')
+      expect(Object.keys(stored.collections[0].completedRuns[0].trackAnalysis.recordScores)).toHaveLength(1)
+    })
   })
 
   it('renders safely for people who prefer reduced motion', () => {

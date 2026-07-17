@@ -4,6 +4,7 @@ import { afterEach, beforeEach, vi } from 'vitest'
 
 beforeEach(() => {
   localStorage.clear()
+  sessionStorage.clear()
   Object.defineProperty(globalThis, 'IntersectionObserver', {
     configurable: true,
     writable: true,

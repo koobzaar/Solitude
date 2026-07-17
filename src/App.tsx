@@ -5,13 +5,15 @@ import { Footer, Header } from './components/Shell'
 import { albumCoverUrl, firstCollectionAlbums, firstLibraryAlbums } from './lib/home'
 import { makeId, makeSeed } from './lib/id'
 import { normalizeValue, parseAlbumList } from './lib/importParser'
-import { MusicBrainzClient, automaticMatch } from './lib/musicbrainz'
+import { MusicBrainzClient, automaticMatch, chooseCanonicalEdition } from './lib/musicbrainz'
+import { loadNavigation, saveNavigation } from './lib/navigation'
+import type { Screen } from './lib/navigation'
 import { appendPaceSample, estimateRemainingMs, formatDuration } from './lib/pace'
 import { MODE_DETAILS, battleCount, getBattleState } from './lib/ranking'
-import type { Album, BattleRun, CatalogCandidate, Collection, RankingMode } from './lib/types'
+import { albumProfileKey, blendedScores, buildTrackAnalysisSnapshot, DEFAULT_HEART_WEIGHT, findDisagreements, validateManualSummary } from './lib/trackAnalysis'
+import type { Album, AlbumTrackProfile, BattleRun, CatalogCandidate, Collection, ManualTrackSummary, PositiveTrackRating, RankingMode, TrackCatalogEntry, TrackEdition } from './lib/types'
+import { BATTLE_ALGORITHM_VERSION } from './lib/types'
 import { usePersistentState } from './lib/usePersistentState'
-
-type Screen = 'library' | 'import' | 'review' | 'mode' | 'battle' | 'results'
 
 const pageMotion = {
   initial: { opacity: 0, y: 10 },
@@ -284,13 +286,16 @@ function LibraryScreen({ collections, onCreate, onRename, onDelete, onImport, on
 
 interface ImportProps {
   collection: Collection
+  initialDraft?: string
+  initialSwapColumns?: boolean
+  onDraftChange: (draft: string, swapColumns: boolean) => void
   onBack: () => void
   onContinue: (albums: Album[]) => void
 }
 
-function ImportScreen({ collection, onBack, onContinue }: ImportProps) {
-  const [input, setInput] = useState(() => collection.albums.map((album) => `${album.title} - ${album.artist}`).join('\n'))
-  const [swapColumns, setSwapColumns] = useState(false)
+function ImportScreen({ collection, initialDraft, initialSwapColumns = false, onDraftChange, onBack, onContinue }: ImportProps) {
+  const [input, setInput] = useState(() => initialDraft ?? collection.albums.map((album) => `${album.title} - ${album.artist}`).join('\n'))
+  const [swapColumns, setSwapColumns] = useState(initialSwapColumns)
   const parsed = useMemo(() => parseAlbumList(input, swapColumns), [input, swapColumns])
   const visibleLines = parsed.lines.filter((line) => line.sourceText.trim())
   const validCount = parsed.albums.length
@@ -314,12 +319,12 @@ function ImportScreen({ collection, onBack, onContinue }: ImportProps) {
           <textarea
             id="album-list"
             value={input}
-            onChange={(event) => setInput(event.target.value)}
+            onChange={(event) => { setInput(event.target.value); onDraftChange(event.target.value, swapColumns) }}
             placeholder={'Blue Train - John Coltrane\nKind of Blue — Miles Davis\nPromises by Floating Points & Pharoah Sanders'}
             spellCheck="false"
           />
           <label className="switch-row">
-            <input type="checkbox" checked={swapColumns} onChange={(event) => setSwapColumns(event.target.checked)} />
+            <input type="checkbox" checked={swapColumns} onChange={(event) => { setSwapColumns(event.target.checked); onDraftChange(input, event.target.checked) }} />
             <span><strong>Artist comes first</strong><small>Swap the Artist and Album columns for every two-column line.</small></span>
           </label>
         </section>
@@ -592,12 +597,13 @@ function ReviewScreen({ collection, client, onBack, onChange, onRemove, onContin
 interface ModeProps {
   collection: Collection
   paceSamples: number[]
+  selected: RankingMode
+  onSelected: (mode: RankingMode) => void
   onBack: () => void
   onStart: (mode: RankingMode) => void
 }
 
-function ModeScreen({ collection, paceSamples, onBack, onStart }: ModeProps) {
-  const [selected, setSelected] = useState<RankingMode>('balanced')
+function ModeScreen({ collection, paceSamples, selected, onSelected, onBack, onStart }: ModeProps) {
   return (
     <div className="page constrained-page mode-page">
       <button className="back-button" type="button" onClick={onBack}>← Review records</button>
@@ -618,7 +624,7 @@ function ModeScreen({ collection, paceSamples, onBack, onStart }: ModeProps) {
               aria-checked={selected === mode.id}
               className={`mode-card ${selected === mode.id ? 'mode-card--selected' : ''}`}
               key={mode.id}
-              onClick={() => setSelected(mode.id)}
+              onClick={() => onSelected(mode.id)}
             >
               {mode.recommended && <span className="recommended">Recommended</span>}
               <span className="mode-check" aria-hidden="true">{selected === mode.id ? '●' : '○'}</span>
@@ -626,7 +632,7 @@ function ModeScreen({ collection, paceSamples, onBack, onStart }: ModeProps) {
               <h2>{mode.name}</h2>
               <p>{mode.description}</p>
               <dl>
-                <div><dt>{mode.id === 'balanced' ? 'Up to' : 'Exactly'}</dt><dd>{count.toLocaleString()} battles</dd></div>
+                <div><dt>Exactly</dt><dd>{count.toLocaleString()} battles</dd></div>
                 <div><dt>About</dt><dd>{duration}</dd></div>
               </dl>
               <ul><li className="pro">+ {mode.pro}</li><li className="con">− {mode.con}</li></ul>
@@ -635,7 +641,7 @@ function ModeScreen({ collection, paceSamples, onBack, onStart }: ModeProps) {
         })}
       </div>
       <div className="page-actions page-actions--center">
-        <p>Initial order, matchup order, and left/right placement are randomized with a saved seed.</p>
+        <p>Initial order, adaptive tie-breaks, and left/right placement are randomized with a saved seed.</p>
         <button className="button button--primary button--large" type="button" onClick={() => onStart(selected)}>Begin {MODE_DETAILS.find((mode) => mode.id === selected)?.name} battle →</button>
       </div>
     </div>
@@ -657,6 +663,7 @@ function BattleScreen({ collection, run, paceSamples, onChoose, onUndo, onRestar
   const battle = useMemo(() => getBattleState(run.mode, collection.albums.map((album) => album.id), run.seed, run.decisions), [collection.albums, run])
   const startedAt = useRef(Date.now())
   const selectionTimer = useRef<number | undefined>(undefined)
+  const pendingSelection = useRef(false)
   const [selection, setSelection] = useState<{ winnerId: string; decisionIndex: number }>()
   const albumMap = useMemo(() => new Map(collection.albums.map((album) => [album.id, album])), [collection.albums])
   const left = battle.matchup ? albumMap.get(battle.matchup.leftId) : undefined
@@ -665,23 +672,34 @@ function BattleScreen({ collection, run, paceSamples, onChoose, onUndo, onRestar
   const remaining = Math.max(0, battle.totalComparisons - completed)
   const progress = battle.totalComparisons ? Math.min(100, (completed / battle.totalComparisons) * 100) : 100
 
-  useEffect(() => { startedAt.current = Date.now() }, [run.decisions.length])
+  const cancelPendingSelection = useCallback(() => {
+    if (selectionTimer.current !== undefined) window.clearTimeout(selectionTimer.current)
+    selectionTimer.current = undefined
+    pendingSelection.current = false
+    setSelection(undefined)
+  }, [])
+
+  useEffect(() => {
+    cancelPendingSelection()
+    startedAt.current = Date.now()
+    return cancelPendingSelection
+  }, [cancelPendingSelection, run.id, run.decisions.length])
 
   const activeSelection = selection?.decisionIndex === run.decisions.length ? selection : undefined
 
   const choose = useCallback((winner: Album, loser: Album) => {
-    if (selection?.decisionIndex === run.decisions.length) return
+    if (pendingSelection.current) return
+    pendingSelection.current = true
     const durationMs = Date.now() - startedAt.current
     const pageVisible = document.visibilityState === 'visible'
     setSelection({ winnerId: winner.id, decisionIndex: run.decisions.length })
-    const commit = () => onChoose(winner.id, loser.id, durationMs, pageVisible)
+    const commit = () => {
+      selectionTimer.current = undefined
+      onChoose(winner.id, loser.id, durationMs, pageVisible)
+    }
     if (reduceMotion) commit()
     else selectionTimer.current = window.setTimeout(commit, 260)
-  }, [onChoose, reduceMotion, run.decisions.length, selection])
-
-  useEffect(() => () => {
-    if (selectionTimer.current) window.clearTimeout(selectionTimer.current)
-  }, [])
+  }, [onChoose, reduceMotion, run.decisions.length])
 
   useEffect(() => {
     const keyHandler = (event: KeyboardEvent) => {
@@ -705,15 +723,15 @@ function BattleScreen({ collection, run, paceSamples, onChoose, onUndo, onRestar
   return (
     <div className="page battle-page">
       <div className="battle-topbar">
-        <button className="back-button back-button--light" type="button" onClick={onExit}>← Save & exit</button>
+        <button className="back-button back-button--light" type="button" disabled={Boolean(activeSelection)} onClick={() => { cancelPendingSelection(); onExit() }}>← Save & exit</button>
         <div><strong>{collection.name}</strong><span>{MODE_DETAILS.find((mode) => mode.id === run.mode)?.name} mode</span></div>
         <div className="battle-utilities">
-          <button className="undo-button" type="button" disabled={!run.decisions.length} onClick={onUndo}>↶ Undo</button>
-          <button className="undo-button" type="button" onClick={onRestart}>Restart</button>
+          <button className="undo-button" type="button" disabled={!run.decisions.length || Boolean(activeSelection)} onClick={() => { cancelPendingSelection(); onUndo() }}>↶ Undo</button>
+          <button className="undo-button" type="button" disabled={Boolean(activeSelection)} onClick={() => { cancelPendingSelection(); onRestart() }}>Restart</button>
         </div>
       </div>
       <div className="battle-progress">
-        <div className="battle-progress__labels"><span>Battle {completed + 1} <i>of {battle.totalComparisons}{run.mode === 'balanced' ? ' max' : ''}</i></span><span>About {formatDuration(estimateRemainingMs(remaining, paceSamples))} left</span></div>
+        <div className="battle-progress__labels"><span>Battle {completed + 1} <i>of {battle.totalComparisons}</i></span><span>About {formatDuration(estimateRemainingMs(remaining, paceSamples))} left</span></div>
         <div className="progress-track"><motion.div animate={{ width: `${progress}%` }} transition={{ duration: 0.3 }} /></div>
       </div>
       <div className="sr-only" aria-live="polite">Choose between {left.title} by {left.artist} and {right.title} by {right.artist}.</div>
@@ -771,17 +789,250 @@ function BattleScreen({ collection, run, paceSamples, onChoose, onUndo, onRestar
   )
 }
 
+interface TrackDraft {
+  editionId?: string
+  ratings: Record<string, PositiveTrackRating>
+  manualSummary?: ManualTrackSummary
+}
+
+interface TrackReviewProps {
+  collection: Collection
+  run: BattleRun
+  client: MusicBrainzClient
+  profiles: Record<string, AlbumTrackProfile>
+  currentAlbumId?: string
+  onCurrentAlbum: (albumId: string) => void
+  onCommit: (album: Album, profile: AlbumTrackProfile, complete: boolean) => void
+  onExit: () => void
+}
+
+function TrackReviewScreen({ collection, run, client, profiles, currentAlbumId, onCurrentAlbum, onCommit, onExit }: TrackReviewProps) {
+  const albums = run.albumSnapshot ?? collection.albums
+  const initialIndex = Math.max(0, albums.findIndex((album) => album.id === currentAlbumId))
+  const [index, setIndex] = useState(initialIndex)
+  const album = albums[index]
+  const profile = album ? profiles[albumProfileKey(album)] : undefined
+  const [catalog, setCatalog] = useState<TrackCatalogEntry>()
+  const [draft, setDraft] = useState<TrackDraft>({ ratings: {} })
+  const [manualMode, setManualMode] = useState(() => Boolean(profile?.manualSummary || !album?.releaseGroupId))
+  const [loading, setLoading] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [error, setError] = useState<string>()
+
+  useEffect(() => {
+    if (!album) return
+    const existing = profiles[albumProfileKey(album)]
+    setDraft({
+      editionId: existing?.editionId,
+      ratings: { ...existing?.ratings },
+      manualSummary: existing?.manualSummary ? { ...existing.manualSummary } : undefined,
+    })
+    setManualMode(Boolean(existing?.manualSummary || !album.releaseGroupId))
+    setCatalog(undefined)
+    setError(undefined)
+    onCurrentAlbum(album.id)
+    if (!album.releaseGroupId) return
+    let cancelled = false
+    setLoading(true)
+    void client.editions(album.releaseGroupId).then((result) => {
+      if (cancelled) return
+      setCatalog(result)
+      setDraft((current) => ({ ...current, editionId: current.editionId ?? chooseCanonicalEdition(result.editions)?.id }))
+      if (!result.editions.length) setManualMode(true)
+    }).catch((reason: unknown) => {
+      if (cancelled) return
+      setError(reason instanceof Error ? reason.message : 'No tracklist could be loaded.')
+      setManualMode(true)
+    }).finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [album?.id, client])
+
+  if (!album) {
+    return <div className="page constrained-page"><h1>No albums to review</h1><button className="button" type="button" onClick={onExit}>Return to results</button></div>
+  }
+
+  const profileEdition: TrackEdition | undefined = profile?.editionId && profile.tracks.length ? {
+    id: profile.editionId,
+    title: profile.editionTitle ?? album.title,
+    trackCount: profile.tracks.length,
+    tracks: profile.tracks,
+  } : undefined
+  const editions = [...(catalog?.editions ?? [])]
+  if (profileEdition && !editions.some((edition) => edition.id === profileEdition.id)) editions.push(profileEdition)
+  const selectedEdition = editions.find((edition) => edition.id === draft.editionId) ?? chooseCanonicalEdition(editions)
+  const manualSummary = draft.manualSummary ?? { trackCount: 0, likedCount: 0, lovedCount: 0 }
+  const manualError = manualMode ? validateManualSummary(manualSummary) : undefined
+  const canCommit = manualMode ? !manualError : Boolean(selectedEdition?.tracks.length)
+
+  const toggleRating = (trackId: string, rating: PositiveTrackRating) => {
+    setDraft((current) => {
+      const ratings = { ...current.ratings }
+      if (ratings[trackId] === rating) delete ratings[trackId]
+      else ratings[trackId] = rating
+      return { ...current, ratings }
+    })
+  }
+
+  const commit = (skipped: boolean) => {
+    const timestamp = nowIso()
+    const key = albumProfileKey(album)
+    const nextProfile: AlbumTrackProfile = skipped ? {
+      albumKey: key,
+      releaseGroupId: album.releaseGroupId,
+      tracks: [],
+      ratings: {},
+      reviewState: 'skipped',
+      updatedAt: timestamp,
+    } : manualMode ? {
+      albumKey: key,
+      releaseGroupId: album.releaseGroupId,
+      tracks: [],
+      ratings: {},
+      manualSummary,
+      reviewState: 'reviewed',
+      updatedAt: timestamp,
+    } : {
+      albumKey: key,
+      releaseGroupId: album.releaseGroupId,
+      editionId: selectedEdition?.id,
+      editionTitle: selectedEdition?.title,
+      tracks: selectedEdition?.tracks ?? [],
+      ratings: draft.ratings,
+      reviewState: 'reviewed',
+      updatedAt: timestamp,
+    }
+    const complete = index === albums.length - 1
+    onCommit(album, nextProfile, complete)
+    if (!complete) {
+      const nextIndex = index + 1
+      setIndex(nextIndex)
+      onCurrentAlbum(albums[nextIndex].id)
+    }
+  }
+
+  const loadMore = async () => {
+    if (!album.releaseGroupId || !catalog?.hasMore) return
+    setLoadingMore(true)
+    setError(undefined)
+    try {
+      const page = await client.editions(album.releaseGroupId, catalog.offset)
+      const byId = new Map([...catalog.editions, ...page.editions].map((edition) => [edition.id, edition]))
+      setCatalog({ ...page, editions: [...byId.values()] })
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'More editions could not be loaded.')
+    } finally {
+      setLoadingMore(false)
+    }
+  }
+
+  return (
+    <div className="page constrained-page track-review-page">
+      <div className="track-review-topbar">
+        <button className="back-button" type="button" onClick={onExit}>← Save & return to results</button>
+        <span>{index + 1} of {albums.length}</span>
+      </div>
+      <div className="track-review-heading">
+        <p className="eyebrow">A closer listen · optional</p>
+        <h1 aria-label="Keep the songs that stay with you.">Keep the songs that<br /><em>stay with you.</em></h1>
+        <p>Untouched songs are neutral. Like and Love are positive signals, never a ranking among tracks.</p>
+      </div>
+      <section className="track-review-card" aria-labelledby="track-album-title">
+        <div className="track-review-sleeve">
+          <AlbumArt src={album.coverUrl} title={album.title} artist={album.artist} />
+          <span>{String(index + 1).padStart(2, '0')}</span>
+        </div>
+        <div className="track-review-content">
+          <div className="track-review-album">
+            <div><h2 id="track-album-title">{album.title}</h2><p>{album.artist}{album.year ? ` · ${album.year}` : ''}</p></div>
+            {!manualMode && editions.length > 0 && (
+              <label className="edition-select">Edition
+                <select value={selectedEdition?.id ?? ''} onChange={(event) => setDraft({ editionId: event.target.value, ratings: {} })}>
+                  {editions.map((edition) => <option key={edition.id} value={edition.id}>{edition.title} · {edition.trackCount} tracks{edition.date ? ` · ${edition.date}` : ''}</option>)}
+                </select>
+              </label>
+            )}
+          </div>
+
+          {loading ? (
+            <div className="tracklist-skeleton" role="status" aria-label="Loading tracklist"><i /><i /><i /><i /><i /></div>
+          ) : manualMode ? (
+            <div className="manual-track-summary">
+              <h3>Enter a simple album summary</h3>
+              <p>{error ?? 'Use this when the catalog has no usable edition. Liked and loved counts are separate.'}</p>
+              <div>
+                <label>Total tracks<input aria-label="Total tracks" type="number" min="1" max="999" value={manualSummary.trackCount || ''} onChange={(event) => setDraft((current) => ({ ...current, manualSummary: { ...manualSummary, trackCount: Number(event.target.value) } }))} /></label>
+                <label>Liked<input aria-label="Liked tracks" type="number" min="0" max="999" value={manualSummary.likedCount || ''} onChange={(event) => setDraft((current) => ({ ...current, manualSummary: { ...manualSummary, likedCount: Number(event.target.value) } }))} /></label>
+                <label>Loved<input aria-label="Loved tracks" type="number" min="0" max="999" value={manualSummary.lovedCount || ''} onChange={(event) => setDraft((current) => ({ ...current, manualSummary: { ...manualSummary, lovedCount: Number(event.target.value) } }))} /></label>
+              </div>
+              {manualError && <p className="field-error" role="alert">{manualError}</p>}
+              {editions.length > 0 && <button className="text-button" type="button" onClick={() => setManualMode(false)}>Use the catalog tracklist</button>}
+            </div>
+          ) : selectedEdition ? (
+            <ol className="tracklist">
+              {selectedEdition.tracks.map((track) => (
+                <li key={track.id}>
+                  <span>{track.mediumPosition > 1 ? `${track.mediumPosition}.` : ''}{String(track.position).padStart(2, '0')}</span>
+                  <strong>{track.title}</strong>
+                  <div role="group" aria-label={`Rating for ${track.title}`}>
+                    <button type="button" className={draft.ratings[track.id] === 'like' ? 'track-rating track-rating--active' : 'track-rating'} aria-pressed={draft.ratings[track.id] === 'like'} onClick={() => toggleRating(track.id, 'like')}>Like</button>
+                    <button type="button" className={draft.ratings[track.id] === 'love' ? 'track-rating track-rating--love track-rating--active' : 'track-rating track-rating--love'} aria-pressed={draft.ratings[track.id] === 'love'} onClick={() => toggleRating(track.id, 'love')}>Love</button>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <div className="manual-track-summary"><p>{error ?? 'No usable tracklist was found for this album.'}</p><button className="button button--small" type="button" onClick={() => setManualMode(true)}>Enter totals manually</button></div>
+          )}
+
+          <div className="track-review-tools">
+            {!manualMode && catalog?.hasMore && <button className="text-button" type="button" disabled={loadingMore} onClick={loadMore}>{loadingMore ? 'Loading…' : 'More editions'}</button>}
+            {!manualMode && <button className="text-button" type="button" onClick={() => setManualMode(true)}>Enter totals manually</button>}
+          </div>
+          <div className="track-review-actions">
+            <button className="button button--outline" type="button" onClick={() => commit(true)}>Skip unheard album</button>
+            <button className="button button--primary" type="button" disabled={!canCommit} onClick={() => commit(false)}>{index === albums.length - 1 ? 'Finish song review' : 'Save & next album →'}</button>
+          </div>
+        </div>
+      </section>
+      <p className="sr-only" aria-live="polite">Reviewing {album.title} by {album.artist}, album {index + 1} of {albums.length}.</p>
+    </div>
+  )
+}
+
+type ResultsView = 'heart' | 'record' | 'balance'
+
 interface ResultsProps {
   collection: Collection
   run: BattleRun
   onHome: () => void
   onAgain: () => void
   onUndo: () => void
+  onTrackReview: () => void
+  onWeightChange: (weight: number) => void
 }
 
-function ResultsScreen({ collection, run, onHome, onAgain, onUndo }: ResultsProps) {
-  const albumMap = new Map((run.albumSnapshot ?? collection.albums).map((album) => [album.id, album]))
-  const ranking = (run.finalRanking ?? []).map((id) => albumMap.get(id)).filter((album): album is Album => Boolean(album))
+function ResultsScreen({ collection, run, onHome, onAgain, onUndo, onTrackReview, onWeightChange }: ResultsProps) {
+  const albums = run.albumSnapshot ?? collection.albums
+  const albumMap = new Map(albums.map((album) => [album.id, album]))
+  const heartRanking = (run.finalRanking ?? []).filter((id) => albumMap.has(id))
+  const heartScores = run.heartScores ?? Object.fromEntries(heartRanking.map((id, index) => [id, heartRanking.length - index]))
+  const analysis = run.trackAnalysis
+  const recordScores = analysis?.recordScores ?? {}
+  const hasTrackEvidence = Object.keys(recordScores).length > 0
+  const [view, setView] = useState<ResultsView>('heart')
+  const weight = run.sliderWeight ?? DEFAULT_HEART_WEIGHT
+  const heartTie = new Map(heartRanking.map((id, index) => [id, index]))
+  const sortByScore = (ids: string[], scores: Record<string, number>) => ids.sort((left, right) => (scores[right] ?? 0) - (scores[left] ?? 0) || (heartTie.get(left) ?? 0) - (heartTie.get(right) ?? 0))
+  const reviewedIds = heartRanking.filter((id) => Number.isFinite(recordScores[id]))
+  const unreviewedIds = heartRanking.filter((id) => !Number.isFinite(recordScores[id]))
+  const balance = blendedScores(heartRanking, heartScores, recordScores, weight)
+  const orderedIds = view === 'record'
+    ? sortByScore([...reviewedIds], recordScores)
+    : view === 'balance' ? sortByScore([...heartRanking], balance) : heartRanking
+  const ranking = orderedIds.map((id) => albumMap.get(id)).filter((album): album is Album => Boolean(album))
+  const disagreements = hasTrackEvidence ? findDisagreements(heartRanking, heartScores, recordScores) : []
+  const isLegacy = run.algorithmVersion !== BATTLE_ALGORITHM_VERSION
+
   return (
     <div className="page results-page constrained-page">
       <div className="results-hero">
@@ -789,32 +1040,93 @@ function ResultsScreen({ collection, run, onHome, onAgain, onUndo }: ResultsProp
         <h1 aria-label="Your next record is clear.">Your next record<br />is <em>clear.</em></h1>
         <p>{run.decisions.length} choices shaped this {MODE_DETAILS.find((mode) => mode.id === run.mode)?.name.toLowerCase()} ranking for {collection.name}.</p>
       </div>
+
+      {isLegacy && <div className="legacy-result"><strong>This ranking uses Solitude’s original model.</strong><p>It stays exactly as you finished it. Rank again when you want a Bradley–Terry result.</p></div>}
+
+      {hasTrackEvidence && (
+        <div className="result-controls">
+          <div className="result-tabs" role="tablist" aria-label="Ranking view">
+            <button role="tab" type="button" aria-selected={view === 'heart'} onClick={() => setView('heart')}>Heart</button>
+            <button role="tab" type="button" aria-selected={view === 'record'} onClick={() => setView('record')}>Record value</button>
+            <button role="tab" type="button" aria-selected={view === 'balance'} onClick={() => setView('balance')}>Your balance</button>
+          </div>
+          {view === 'balance' && (
+            <label className="balance-slider">Heart <strong>{Math.round(weight * 100)}%</strong>
+              <input aria-label="Heart weight" type="range" min="0" max="100" value={Math.round(weight * 100)} onChange={(event) => onWeightChange(Number(event.target.value) / 100)} />
+              <span>Songs {Math.round((1 - weight) * 100)}%</span>
+            </label>
+          )}
+          <p className="result-view-note" aria-live="polite">{view === 'heart' ? 'Album choices only.' : view === 'record' ? 'Song evidence with an eight-track shrinkage prior.' : 'Standardized heart and song evidence, blended live.'}</p>
+        </div>
+      )}
+
       <ol className="ranking-list">
         {ranking.map((album, index) => (
           <motion.li key={album.id} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: Math.min(index * 0.045, 0.5) }}>
             <span className="rank-number">{String(index + 1).padStart(2, '0')}</span>
             <AlbumArt src={album.coverUrl} title={album.title} artist={album.artist} />
             <span><strong>{album.title}</strong><small>{album.artist}{album.year ? ` · ${album.year}` : ''}</small></span>
-            {index === 0 && <i className="top-pick">Top pick</i>}
+            {index === 0 && !hasTrackEvidence && <i className="top-pick">Top pick</i>}
+            {hasTrackEvidence && <small className="ranking-score">{view === 'heart' ? `${(heartScores[album.id] ?? 0).toFixed(2)} heart` : view === 'record' ? `${Math.round((recordScores[album.id] ?? 0) * 100)}% record` : `${(balance[album.id] ?? 0).toFixed(2)} balance`}</small>}
           </motion.li>
         ))}
       </ol>
+
+      {view === 'record' && unreviewedIds.length > 0 && (
+        <section className="unreviewed-results"><h2>Not reviewed</h2><p>These albums stay outside Record value until you review or enter their songs.</p><ul>{unreviewedIds.map((id) => <li key={id}>{albumMap.get(id)?.title}</li>)}</ul></section>
+      )}
+
+      {view === 'balance' && disagreements.length > 0 && (
+        <section className="disagreements"><p className="eyebrow">Where heart and songs part ways</p><ul>{disagreements.map((alert) => <li key={`${alert.firstId}:${alert.secondId}`}><strong>{albumMap.get(alert.heartHigherId)?.title}</strong> wins your album battles, while <strong>{albumMap.get(alert.trackHigherId)?.title}</strong> has the stronger song evidence.</li>)}</ul></section>
+      )}
+
+      {!isLegacy && !analysis && (
+        <section className="track-invitation">
+          <p className="eyebrow">One optional encore</p><h2>Go deeper with the songs?</h2>
+          <p>Mark the tracks you Like or Love to reveal Record value and Your balance. Your heart ranking is already complete and will not be replaced.</p>
+          <div><button className="button button--primary" type="button" onClick={onTrackReview}>Review the songs</button><button className="button button--outline" type="button" onClick={onHome}>Keep this ranking</button></div>
+        </section>
+      )}
+
       <div className="results-actions">
-        <button className="button button--primary" type="button" onClick={onAgain}>Rank again</button>
+        <button className="button button--primary" type="button" onClick={onAgain}>{isLegacy ? 'Rank again with the new model' : 'Rank again'}</button>
+        {!isLegacy && analysis && <button className="button button--outline" type="button" onClick={onTrackReview}>Review songs</button>}
         <button className="button button--outline" type="button" onClick={onHome}>Back to collections</button>
-        <button className="text-button" type="button" onClick={onUndo}>↶ Undo last choice</button>
+        {!isLegacy && <button className="text-button" type="button" onClick={onUndo}>↶ Undo last choice</button>}
       </div>
     </div>
   )
 }
 
 export default function App() {
-  const { state, setState, notice, clearNotice } = usePersistentState()
-  const [screen, setScreen] = useState<Screen>('library')
-  const [selectedCollectionId, setSelectedCollectionId] = useState<string | undefined>(state.currentCollectionId)
-  const [resultRunId, setResultRunId] = useState<string>()
+  const { state, setState, notice, clearNotice, showNotice } = usePersistentState()
+  const [restoredNavigation] = useState(() => loadNavigation(state))
+  const [screen, setScreen] = useState<Screen>(restoredNavigation.navigation.screen)
+  const [selectedCollectionId, setSelectedCollectionId] = useState<string | undefined>(restoredNavigation.navigation.collectionId)
+  const [resultRunId, setResultRunId] = useState<string | undefined>(restoredNavigation.navigation.runId)
+  const [importDraft, setImportDraft] = useState<string | undefined>(restoredNavigation.navigation.importDraft)
+  const [swapColumns, setSwapColumns] = useState(restoredNavigation.navigation.swapColumns ?? false)
+  const [selectedMode, setSelectedMode] = useState<RankingMode>(restoredNavigation.navigation.selectedMode ?? 'balanced')
+  const [trackReviewAlbumId, setTrackReviewAlbumId] = useState<string | undefined>(restoredNavigation.navigation.trackReviewAlbumId)
   const client = useMemo(() => new MusicBrainzClient(), [])
   const selectedCollection = state.collections.find((collection) => collection.id === selectedCollectionId)
+
+  useEffect(() => {
+    if (restoredNavigation.invalid) showNotice('That restored page was no longer valid, so Solitude returned to your library.')
+  }, [restoredNavigation.invalid])
+
+  useEffect(() => {
+    saveNavigation({
+      version: 1,
+      screen,
+      collectionId: screen === 'library' ? undefined : selectedCollectionId,
+      runId: screen === 'battle' ? selectedCollection?.activeRun?.id : (screen === 'results' || screen === 'track-review') ? resultRunId : undefined,
+      importDraft,
+      swapColumns,
+      selectedMode,
+      trackReviewAlbumId,
+    })
+  }, [importDraft, resultRunId, screen, selectedCollection?.activeRun?.id, selectedCollectionId, selectedMode, swapColumns, trackReviewAlbumId])
 
   const goHome = () => {
     setScreen('library')
@@ -830,8 +1142,15 @@ export default function App() {
   }, [setState])
 
   const selectAndOpen = (id: string, nextScreen: Screen) => {
+    const collection = state.collections.find((candidate) => candidate.id === id)
     setSelectedCollectionId(id)
     setState((current) => ({ ...current, currentCollectionId: id }))
+    setResultRunId(undefined)
+    if (nextScreen === 'import') {
+      setImportDraft(collection?.albums.map((album) => `${album.title} - ${album.artist}`).join('\n') ?? '')
+      setSwapColumns(false)
+    }
+    if (nextScreen === 'mode') setSelectedMode('balanced')
     setScreen(nextScreen)
   }
 
@@ -840,6 +1159,8 @@ export default function App() {
     const collection: Collection = { id: makeId('collection'), name, vibe, note, albums: [], createdAt: timestamp, updatedAt: timestamp, completedRuns: [] }
     setState((current) => ({ ...current, collections: [...current.collections, collection], currentCollectionId: collection.id }))
     setSelectedCollectionId(collection.id)
+    setImportDraft('')
+    setSwapColumns(false)
     setScreen('import')
   }
 
@@ -847,7 +1168,7 @@ export default function App() {
     if (!selectedCollection) return
     const timestamp = nowIso()
     const run: BattleRun = {
-      id: makeId('run'), mode, seed: makeSeed(), decisions: [], status: 'active', createdAt: timestamp, updatedAt: timestamp, paceSamples: [],
+      id: makeId('run'), mode, seed: makeSeed(), algorithmVersion: BATTLE_ALGORITHM_VERSION, decisions: [], status: 'active', createdAt: timestamp, updatedAt: timestamp, paceSamples: [], sliderWeight: DEFAULT_HEART_WEIGHT,
     }
     updateCollection(selectedCollection.id, (collection) => ({ ...collection, activeRun: run, updatedAt: timestamp }))
     setScreen('battle')
@@ -869,7 +1190,7 @@ export default function App() {
       collections: current.collections.map((collection) => {
         if (collection.id !== selectedCollection.id) return collection
         if (nextBattle.complete) {
-          const completedRun: BattleRun = { ...nextRun, status: 'completed', completedAt: timestamp, finalRanking: nextBattle.ranking, albumSnapshot: selectedCollection.albums }
+          const completedRun: BattleRun = { ...nextRun, status: 'completed', completedAt: timestamp, finalRanking: nextBattle.ranking, heartScores: nextBattle.heartScores, albumSnapshot: selectedCollection.albums.map((album) => ({ ...album })) }
           return { ...collection, activeRun: undefined, completedRuns: [...collection.completedRuns, completedRun], updatedAt: timestamp }
         }
         return { ...collection, activeRun: nextRun, updatedAt: timestamp }
@@ -895,9 +1216,19 @@ export default function App() {
   const resultRun = selectedCollection?.completedRuns.find((run) => run.id === resultRunId)
 
   const undoCompleted = () => {
-    if (!selectedCollection || !resultRun || !resultRun.decisions.length) return
+    if (!selectedCollection || !resultRun || resultRun.algorithmVersion !== BATTLE_ALGORITHM_VERSION || !resultRun.decisions.length) return
     const timestamp = nowIso()
-    const activeRun: BattleRun = { ...resultRun, status: 'active', completedAt: undefined, finalRanking: undefined, albumSnapshot: undefined, decisions: resultRun.decisions.slice(0, -1), updatedAt: timestamp }
+    const activeRun: BattleRun = {
+      ...resultRun,
+      status: 'active',
+      completedAt: undefined,
+      finalRanking: undefined,
+      heartScores: undefined,
+      trackAnalysis: undefined,
+      albumSnapshot: undefined,
+      decisions: resultRun.decisions.slice(0, -1),
+      updatedAt: timestamp,
+    }
     updateCollection(selectedCollection.id, (collection) => ({
       ...collection,
       activeRun,
@@ -906,6 +1237,50 @@ export default function App() {
     }))
     setResultRunId(undefined)
     setScreen('battle')
+  }
+
+  const openTrackReview = () => {
+    if (!resultRun || !selectedCollection) return
+    const albums = resultRun.albumSnapshot ?? selectedCollection.albums
+    const validCurrent = albums.some((album) => album.id === trackReviewAlbumId)
+    const firstUnreviewed = albums.find((album) => state.trackProfiles[albumProfileKey(album)]?.reviewState !== 'reviewed')
+    setTrackReviewAlbumId(validCurrent ? trackReviewAlbumId : (firstUnreviewed ?? albums[0])?.id)
+    setScreen('track-review')
+  }
+
+  const commitTrackProfile = (album: Album, profile: AlbumTrackProfile, complete: boolean) => {
+    if (!selectedCollection || !resultRun || profile.albumKey !== albumProfileKey(album)) return
+    const collectionId = selectedCollection.id
+    const runId = resultRun.id
+    setState((current) => {
+      const trackProfiles = { ...current.trackProfiles, [profile.albumKey]: profile }
+      return {
+        ...current,
+        trackProfiles,
+        collections: current.collections.map((collection) => {
+          if (collection.id !== collectionId) return collection
+          return {
+            ...collection,
+            completedRuns: collection.completedRuns.map((run) => {
+              if (run.id !== runId || !complete) return run
+              const albums = run.albumSnapshot ?? collection.albums
+              return { ...run, trackAnalysis: buildTrackAnalysisSnapshot(albums, trackProfiles), updatedAt: nowIso() }
+            }),
+            updatedAt: nowIso(),
+          }
+        }),
+      }
+    })
+    if (complete) setScreen('results')
+  }
+
+  const updateResultWeight = (weight: number) => {
+    if (!selectedCollection || !resultRun) return
+    updateCollection(selectedCollection.id, (collection) => ({
+      ...collection,
+      completedRuns: collection.completedRuns.map((run) => run.id === resultRun.id ? { ...run, sliderWeight: weight, updatedAt: nowIso() } : run),
+      updatedAt: nowIso(),
+    }))
   }
 
   let content: React.ReactNode
@@ -924,13 +1299,13 @@ export default function App() {
         onImport={(id) => selectAndOpen(id, 'import')}
         onRank={(id) => selectAndOpen(id, 'mode')}
         onResume={(id) => selectAndOpen(id, 'battle')}
-        onViewRun={(collectionId, runId) => { setSelectedCollectionId(collectionId); setResultRunId(runId); setScreen('results') }}
+        onViewRun={(collectionId, runId) => { setSelectedCollectionId(collectionId); setState((current) => ({ ...current, currentCollectionId: collectionId })); setResultRunId(runId); setScreen('results') }}
       />
     )
   } else if (!selectedCollection) {
     content = <div className="page constrained-page"><h1>Collection not found</h1><button className="button" type="button" onClick={goHome}>Return to library</button></div>
   } else if (screen === 'import') {
-    content = <ImportScreen collection={selectedCollection} onBack={goHome} onContinue={(albums) => { updateCollection(selectedCollection.id, (collection) => ({ ...collection, albums, activeRun: undefined, updatedAt: nowIso() })); setScreen('review') }} />
+    content = <ImportScreen collection={selectedCollection} initialDraft={importDraft} initialSwapColumns={swapColumns} onDraftChange={(draft, swap) => { setImportDraft(draft); setSwapColumns(swap) }} onBack={goHome} onContinue={(albums) => { updateCollection(selectedCollection.id, (collection) => ({ ...collection, albums, activeRun: undefined, updatedAt: nowIso() })); setScreen('review') }} />
   } else if (screen === 'review') {
     content = (
       <ReviewScreen
@@ -943,11 +1318,13 @@ export default function App() {
       />
     )
   } else if (screen === 'mode') {
-    content = <ModeScreen collection={selectedCollection} paceSamples={state.learnedPaceSamples} onBack={() => setScreen('review')} onStart={startRun} />
+    content = <ModeScreen collection={selectedCollection} paceSamples={state.learnedPaceSamples} selected={selectedMode} onSelected={setSelectedMode} onBack={() => setScreen('review')} onStart={startRun} />
   } else if (screen === 'battle' && selectedCollection.activeRun) {
     content = <BattleScreen collection={selectedCollection} run={selectedCollection.activeRun} paceSamples={state.learnedPaceSamples} onChoose={chooseAlbum} onUndo={undoActive} onRestart={() => { if (window.confirm('Restart this run? Your saved choices from this run will be cleared.')) startRun(selectedCollection.activeRun!.mode) }} onExit={goHome} />
   } else if (screen === 'results' && resultRun) {
-    content = <ResultsScreen collection={selectedCollection} run={resultRun} onHome={goHome} onAgain={() => setScreen('mode')} onUndo={undoCompleted} />
+    content = <ResultsScreen collection={selectedCollection} run={resultRun} onHome={goHome} onAgain={() => setScreen('mode')} onUndo={undoCompleted} onTrackReview={openTrackReview} onWeightChange={updateResultWeight} />
+  } else if (screen === 'track-review' && resultRun) {
+    content = <TrackReviewScreen collection={selectedCollection} run={resultRun} client={client} profiles={state.trackProfiles} currentAlbumId={trackReviewAlbumId} onCurrentAlbum={setTrackReviewAlbumId} onCommit={commitTrackProfile} onExit={() => setScreen('results')} />
   } else {
     content = <div className="page constrained-page"><h1>Nothing to resume</h1><button className="button" type="button" onClick={goHome}>Return to library</button></div>
   }

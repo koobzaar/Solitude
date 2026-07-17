@@ -1,6 +1,6 @@
 import { normalizeValue } from './importParser'
 import { loadCatalogCache, saveCatalogCache } from './storage'
-import type { CatalogCandidate, CatalogCoverResult, CatalogMatchKind } from './types'
+import type { CatalogCandidate, CatalogCoverResult, CatalogMatchKind, TrackCatalogEntry, TrackEdition, TrackRecording } from './types'
 
 const API_URL = 'https://musicbrainz.org/ws/2/release-group/'
 const COVER_URL = 'https://coverartarchive.org/release-group'
@@ -8,6 +8,7 @@ const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1_000
 const REQUEST_INTERVAL_MS = 1_100
 const SEARCH_LIMIT = 20
 const RESULT_LIMIT = 5
+const EDITION_LIMIT = 10
 const COVER_CONCURRENCY = 2
 
 interface MusicBrainzArtistCredit {
@@ -27,6 +28,37 @@ interface MusicBrainzReleaseGroup {
 
 interface MusicBrainzResponse {
   'release-groups'?: MusicBrainzReleaseGroup[]
+}
+
+interface MusicBrainzTrack {
+  id?: string
+  title?: string
+  position?: number
+  length?: number
+  recording?: { id?: string; title?: string; length?: number }
+}
+
+interface MusicBrainzMedium {
+  position?: number
+  format?: string
+  'track-count'?: number
+  tracks?: MusicBrainzTrack[]
+}
+
+interface MusicBrainzRelease {
+  id?: string
+  title?: string
+  status?: string
+  date?: string
+  country?: string
+  disambiguation?: string
+  media?: MusicBrainzMedium[]
+}
+
+interface MusicBrainzEditionResponse {
+  'release-count'?: number
+  'release-offset'?: number
+  releases?: MusicBrainzRelease[]
 }
 
 interface CoverArtImage {
@@ -85,6 +117,86 @@ export function coverUrlFor(releaseGroupId: string): string {
 
 export function coverMetadataUrlFor(releaseGroupId: string): string {
   return `${COVER_URL}/${releaseGroupId}/`
+}
+
+export function buildEditionsUrl(releaseGroupId: string, offset = 0): string {
+  const params = new URLSearchParams({
+    'release-group': releaseGroupId,
+    inc: 'recordings',
+    fmt: 'json',
+    limit: String(EDITION_LIMIT),
+    offset: String(Math.max(0, offset)),
+  })
+  return `https://musicbrainz.org/ws/2/release?${params.toString()}`
+}
+
+function editionMarkerText(edition: TrackEdition): string {
+  return `${edition.title} ${edition.disambiguation ?? ''}`.toLowerCase()
+}
+
+function hasExpandedEditionMarker(edition: TrackEdition): boolean {
+  return /\b(deluxe|bonus|expanded|anniversary|remaster(?:ed)?|special edition|collector'?s)\b/.test(editionMarkerText(edition))
+}
+
+export function chooseCanonicalEdition(editions: readonly TrackEdition[]): TrackEdition | undefined {
+  if (!editions.length) return undefined
+  const frequencies = new Map<number, number>()
+  for (const edition of editions) frequencies.set(edition.trackCount, (frequencies.get(edition.trackCount) ?? 0) + 1)
+  const modalCount = [...frequencies].sort((left, right) => right[1] - left[1] || left[0] - right[0])[0]?.[0]
+  return [...editions].sort((left, right) => (
+    Number(right.status?.toLowerCase() === 'official') - Number(left.status?.toLowerCase() === 'official') ||
+    Number(right.trackCount === modalCount) - Number(left.trackCount === modalCount) ||
+    Number(hasExpandedEditionMarker(left)) - Number(hasExpandedEditionMarker(right)) ||
+    (left.date || '9999-99-99').localeCompare(right.date || '9999-99-99') ||
+    left.id.localeCompare(right.id)
+  ))[0]
+}
+
+export function mapEditionResponse(response: MusicBrainzEditionResponse, releaseGroupId: string): TrackCatalogEntry {
+  const mapped: TrackEdition[] = (response.releases ?? []).flatMap((release): TrackEdition[] => {
+    if (!release.id || !release.title) return []
+    const tracks: TrackRecording[] = (release.media ?? []).flatMap((medium, mediumIndex) => (
+      (medium.tracks ?? []).flatMap((track, trackIndex): TrackRecording[] => {
+        const title = track.title ?? track.recording?.title
+        if (!title) return []
+        return [{
+          id: track.id ?? track.recording?.id ?? `${release.id}:${medium.position ?? mediumIndex + 1}:${track.position ?? trackIndex + 1}`,
+          title,
+          position: track.position ?? trackIndex + 1,
+          mediumPosition: medium.position ?? mediumIndex + 1,
+          lengthMs: track.length ?? track.recording?.length,
+        }]
+      })
+    ))
+    if (!tracks.length) return []
+    return [{
+      id: release.id,
+      title: release.title,
+      status: release.status,
+      date: release.date,
+      country: release.country,
+      disambiguation: release.disambiguation,
+      format: [...new Set((release.media ?? []).map((medium) => medium.format).filter(Boolean))].join(' + ') || undefined,
+      trackCount: tracks.length,
+      tracks,
+    }]
+  })
+
+  const distinct = new Map<string, TrackEdition>()
+  for (const edition of mapped.sort((left, right) => left.id.localeCompare(right.id))) {
+    const signature = edition.tracks.map((track) => normalizeCatalogValue(track.title)).join('\u0000')
+    if (!distinct.has(signature)) distinct.set(signature, edition)
+  }
+  const rawCount = response.releases?.length ?? 0
+  const releaseCount = response['release-count'] ?? rawCount
+  const nextOffset = (response['release-offset'] ?? 0) + rawCount
+  return {
+    releaseGroupId,
+    editions: [...distinct.values()],
+    offset: nextOffset,
+    releaseCount,
+    hasMore: nextOffset < releaseCount,
+  }
 }
 
 export function buildSearchUrl(title: string, artist: string, strategy: SearchStrategy = 'exact'): string {
@@ -307,6 +419,42 @@ export class MusicBrainzClient {
     const result = this.searchTail.then(task, task)
     this.searchTail = result.then(() => undefined, () => undefined)
     return result
+  }
+
+  private async editionRequest(releaseGroupId: string, offset: number): Promise<TrackCatalogEntry> {
+    let lastError: unknown
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        await this.throttle()
+        const response = await this.fetchImpl(buildEditionsUrl(releaseGroupId, offset), { headers: { Accept: 'application/json' } })
+        if (!response.ok) {
+          if (response.status === 429 || response.status >= 500) throw new Error(`MusicBrainz returned ${response.status}`)
+          throw new PermanentCatalogError(`MusicBrainz editions failed (${response.status})`)
+        }
+        return mapEditionResponse((await response.json()) as MusicBrainzEditionResponse, releaseGroupId)
+      } catch (error) {
+        lastError = error
+        if (error instanceof PermanentCatalogError) throw error
+        if (attempt < 2) await this.wait((attempt + 1) * 750)
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error('MusicBrainz editions are unavailable right now.')
+  }
+
+  async editions(releaseGroupId: string, offset = 0, bypassCache = false): Promise<TrackCatalogEntry> {
+    const cacheKey = `${releaseGroupId}:${Math.max(0, offset)}`
+    const cached = loadCatalogCache(this.storage).tracklists[cacheKey]
+    if (!bypassCache && cached && cached.expiresAt > this.now()) return cached.result
+
+    return this.enqueueSearch(async () => {
+      const queued = loadCatalogCache(this.storage).tracklists[cacheKey]
+      if (!bypassCache && queued && queued.expiresAt > this.now()) return queued.result
+      const result = await this.editionRequest(releaseGroupId, offset)
+      const latestCache = loadCatalogCache(this.storage)
+      latestCache.tracklists[cacheKey] = { expiresAt: this.now() + CACHE_TTL_MS, result }
+      saveCatalogCache(latestCache, this.storage)
+      return result
+    })
   }
 
   async search(title: string, artist: string, bypassCache = false): Promise<CatalogCandidate[]> {

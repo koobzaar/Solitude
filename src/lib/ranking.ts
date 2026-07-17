@@ -11,6 +11,7 @@ export interface BattleState {
   totalComparisons: number
   matchup?: Matchup
   ranking?: string[]
+  heartScores?: Record<string, number>
 }
 
 export interface ModeDetails {
@@ -28,7 +29,7 @@ export const MODE_DETAILS: ModeDetails[] = [
     id: 'quick',
     name: 'Quick',
     eyebrow: 'A first pressing',
-    description: 'Three seeded round-robin rounds, or every available round for a tiny list.',
+    description: 'Three seeded round-robin rounds, scored as one connected body of preference evidence.',
     pro: 'Fastest route to a useful shortlist.',
     con: 'The middle of the ranking is approximate.',
   },
@@ -36,7 +37,7 @@ export const MODE_DETAILS: ModeDetails[] = [
     id: 'balanced',
     name: 'Balanced',
     eyebrow: 'The house favorite',
-    description: 'An interactive merge sort that produces a complete, defensible order.',
+    description: 'An adaptive battle that spends its fixed budget on uncertain, under-heard matchups.',
     pro: 'Excellent balance of speed and confidence.',
     con: 'Not every possible pair meets directly.',
     recommended: true,
@@ -115,72 +116,146 @@ export function balancedWorstCaseCount(albumCount: number): number {
   return albumCount * power - 2 ** power + 1
 }
 
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.min(maximum, Math.max(minimum, value))
+}
+
+export function balancedBudget(albumCount: number): number {
+  const allPairs = (albumCount * (albumCount - 1)) / 2
+  const adaptiveAllowance = clamp(Math.ceil(albumCount / 5), 10, 20)
+  return Math.min(allPairs, balancedWorstCaseCount(albumCount) + adaptiveAllowance)
+}
+
 export function battleCount(mode: RankingMode, albumCount: number, seed = 1): number {
   const ids = Array.from({ length: albumCount }, (_, index) => String(index))
   if (mode === 'quick') return quickSchedule(ids, seed).length
   if (mode === 'thorough') return (albumCount * (albumCount - 1)) / 2
-  return balancedWorstCaseCount(albumCount)
+  return balancedBudget(albumCount)
 }
 
-function orientPair(pair: [string, string], seed: number, index: number): Matchup {
+function orientPair(pair: readonly [string, string], seed: number, index: number): Matchup {
   const random = seededRandom((seed ^ Math.imul(index + 1, 0x9e3779b1)) >>> 0)
   return random() < 0.5
     ? { leftId: pair[0], rightId: pair[1] }
     : { leftId: pair[1], rightId: pair[0] }
 }
 
-interface Score {
-  wins: number
-  games: number
-  opponents: string[]
-  beaten: Set<string>
+function sigmoid(value: number): number {
+  if (value >= 0) {
+    const exp = Math.exp(-Math.min(value, 40))
+    return 1 / (1 + exp)
+  }
+  const exp = Math.exp(Math.max(value, -40))
+  return exp / (1 + exp)
 }
 
-function rankFromDecisions(
+/** Fits regularized Bradley–Terry abilities with deterministic coordinate-Newton updates. */
+export function fitBradleyTerry(
+  albumIds: readonly string[],
+  decisions: readonly BattleDecision[],
+  lambda = 1,
+): Record<string, number> {
+  const indexById = new Map(albumIds.map((id, index) => [id, index]))
+  const observations = albumIds.map(() => [] as Array<{ opponent: number; result: 0 | 1 }>)
+  for (const decision of decisions) {
+    const winner = indexById.get(decision.winnerId)
+    const loser = indexById.get(decision.loserId)
+    if (winner === undefined || loser === undefined || winner === loser) continue
+    observations[winner].push({ opponent: loser, result: 1 })
+    observations[loser].push({ opponent: winner, result: 0 })
+  }
+
+  const scores = albumIds.map(() => 0)
+  for (let iteration = 0; iteration < 100; iteration += 1) {
+    let largestStep = 0
+    for (let album = 0; album < scores.length; album += 1) {
+      let gradient = -lambda * scores[album]
+      let curvature = lambda
+      for (const observation of observations[album]) {
+        const probability = sigmoid(scores[album] - scores[observation.opponent])
+        gradient += observation.result - probability
+        curvature += probability * (1 - probability)
+      }
+      const step = curvature ? gradient / curvature : 0
+      scores[album] += step
+      largestStep = Math.max(largestStep, Math.abs(step))
+    }
+
+    const mean = scores.reduce((sum, score) => sum + score, 0) / Math.max(1, scores.length)
+    for (let album = 0; album < scores.length; album += 1) scores[album] -= mean
+    if (largestStep < 1e-10) break
+  }
+
+  return Object.fromEntries(albumIds.map((id, index) => [id, scores[index]]))
+}
+
+export function rankByHeartScores(
+  albumIds: readonly string[],
+  heartScores: Readonly<Record<string, number>>,
+  seed: number,
+): string[] {
+  const tieOrder = seededShuffle(albumIds, seed)
+  const tieIndex = new Map(tieOrder.map((id, index) => [id, index]))
+  return [...albumIds].sort((left, right) => {
+    const difference = (heartScores[right] ?? 0) - (heartScores[left] ?? 0)
+    if (Math.abs(difference) > 1e-10) return difference
+    return (tieIndex.get(left) ?? 0) - (tieIndex.get(right) ?? 0)
+  })
+}
+
+function completeState(
   albumIds: readonly string[],
   decisions: readonly BattleDecision[],
   seed: number,
-  mode: 'quick' | 'thorough',
-): string[] {
-  const scores = new Map<string, Score>(
-    albumIds.map((id) => [id, { wins: 0, games: 0, opponents: [], beaten: new Set() }]),
-  )
-  for (const decision of decisions) {
-    const winner = scores.get(decision.winnerId)
-    const loser = scores.get(decision.loserId)
-    if (!winner || !loser) continue
-    winner.wins += 1
-    winner.games += 1
-    loser.games += 1
-    winner.opponents.push(decision.loserId)
-    loser.opponents.push(decision.winnerId)
-    winner.beaten.add(decision.loserId)
+  totalComparisons: number,
+): BattleState {
+  const evidence = decisions.slice(0, totalComparisons)
+  const heartScores = fitBradleyTerry(albumIds, evidence)
+  return {
+    complete: true,
+    completedComparisons: totalComparisons,
+    totalComparisons,
+    heartScores,
+    ranking: rankByHeartScores(albumIds, heartScores, seed),
   }
+}
 
-  const seededOrder = seededShuffle(albumIds, seed)
-  const seedIndex = new Map(seededOrder.map((id, index) => [id, index]))
-  const primary = (id: string) => {
-    const score = scores.get(id)!
-    return mode === 'quick' ? (score.games ? score.wins / score.games : 0) : score.wins
-  }
-  const groupWins = (id: string) => {
-    const score = scores.get(id)!
-    return [...score.beaten].filter((opponent) => Math.abs(primary(opponent) - primary(id)) < 1e-9).length
-  }
-  const opponentStrength = (id: string) => {
-    const score = scores.get(id)!
-    return score.opponents.reduce((sum, opponent) => sum + primary(opponent), 0)
-  }
+function pairKey(left: string, right: string): string {
+  return left < right ? `${left}\u0000${right}` : `${right}\u0000${left}`
+}
 
-  return [...albumIds].sort((a, b) => {
-    const primaryDifference = primary(b) - primary(a)
-    if (Math.abs(primaryDifference) > 1e-9) return primaryDifference
-    const tiedGroupDifference = groupWins(b) - groupWins(a)
-    if (tiedGroupDifference) return tiedGroupDifference
-    const strengthDifference = opponentStrength(b) - opponentStrength(a)
-    if (Math.abs(strengthDifference) > 1e-9) return strengthDifference
-    return (seedIndex.get(a) ?? 0) - (seedIndex.get(b) ?? 0)
-  })
+function samePair(decision: BattleDecision, pair: readonly [string, string]): boolean {
+  return pairKey(decision.winnerId, decision.loserId) === pairKey(pair[0], pair[1])
+}
+
+function scheduledState(
+  albumIds: readonly string[],
+  decisions: readonly BattleDecision[],
+  seed: number,
+  schedule: ReadonlyArray<readonly [string, string]>,
+): BattleState {
+  let completed = 0
+  while (completed < decisions.length && completed < schedule.length && samePair(decisions[completed], schedule[completed])) completed += 1
+  if (completed >= schedule.length) return completeState(albumIds, decisions, seed, schedule.length)
+  return {
+    complete: false,
+    completedComparisons: completed,
+    totalComparisons: schedule.length,
+    matchup: orientPair(schedule[completed], seed ^ 0xc0ffee, completed),
+  }
+}
+
+function allPairs(albumIds: readonly string[], seed: number): Array<[string, string]> {
+  const pairs: Array<[string, string]> = []
+  for (let first = 0; first < albumIds.length; first += 1) {
+    for (let second = first + 1; second < albumIds.length; second += 1) pairs.push([albumIds[first], albumIds[second]])
+  }
+  return seededShuffle(pairs, seed ^ 0x7f4a7c15)
+}
+
+export function balancedChain(albumIds: readonly string[], seed: number): Array<[string, string]> {
+  const order = seededShuffle(albumIds, seed)
+  return order.slice(1).map((id, index) => [order[index], id])
 }
 
 function balancedState(
@@ -188,60 +263,55 @@ function balancedState(
   seed: number,
   decisions: readonly BattleDecision[],
 ): BattleState {
-  let runs = seededShuffle(albumIds, seed).map((id) => [id])
-  let consumed = 0
-  const totalComparisons = balancedWorstCaseCount(albumIds.length)
-
-  while (runs.length > 1) {
-    const nextRuns: string[][] = []
-    for (let runIndex = 0; runIndex < runs.length; runIndex += 2) {
-      const left = runs[runIndex]
-      const right = runs[runIndex + 1]
-      if (!right) {
-        nextRuns.push(left)
-        continue
-      }
-
-      let leftIndex = 0
-      let rightIndex = 0
-      const merged: string[] = []
-      while (leftIndex < left.length && rightIndex < right.length) {
-        const pair: [string, string] = [left[leftIndex], right[rightIndex]]
-        const decision = decisions[consumed]
-        if (!decision) {
-          return {
-            complete: false,
-            completedComparisons: consumed,
-            totalComparisons,
-            matchup: orientPair(pair, seed ^ 0x51f15e, consumed),
-          }
-        }
-
-        const expected = new Set(pair)
-        if (!expected.has(decision.winnerId) || !expected.has(decision.loserId)) {
-          return {
-            complete: false,
-            completedComparisons: consumed,
-            totalComparisons,
-            matchup: orientPair(pair, seed ^ 0x51f15e, consumed),
-          }
-        }
-        merged.push(decision.winnerId)
-        if (decision.winnerId === left[leftIndex]) leftIndex += 1
-        else rightIndex += 1
-        consumed += 1
-      }
-      merged.push(...left.slice(leftIndex), ...right.slice(rightIndex))
-      nextRuns.push(merged)
+  const budget = balancedBudget(albumIds.length)
+  const chain = balancedChain(albumIds, seed)
+  let completed = 0
+  while (completed < decisions.length && completed < chain.length && samePair(decisions[completed], chain[completed])) completed += 1
+  if (completed < chain.length) {
+    return {
+      complete: false,
+      completedComparisons: completed,
+      totalComparisons: budget,
+      matchup: orientPair(chain[completed], seed ^ 0x51f15e, completed),
     }
-    runs = nextRuns
   }
 
+  const validIds = new Set(albumIds)
+  const evidence = decisions.slice(0, budget).filter((decision) => (
+    decision.winnerId !== decision.loserId && validIds.has(decision.winnerId) && validIds.has(decision.loserId)
+  ))
+  const seen = new Set<string>()
+  const matchCounts = new Map(albumIds.map((id) => [id, 0]))
+  for (const decision of evidence) {
+    const key = pairKey(decision.winnerId, decision.loserId)
+    if (seen.has(key)) continue
+    seen.add(key)
+    matchCounts.set(decision.winnerId, (matchCounts.get(decision.winnerId) ?? 0) + 1)
+    matchCounts.set(decision.loserId, (matchCounts.get(decision.loserId) ?? 0) + 1)
+  }
+  completed = seen.size
+  if (completed >= budget) return completeState(albumIds, evidence, seed, budget)
+
+  const heartScores = fitBradleyTerry(albumIds, evidence)
+  let selected: [string, string] | undefined
+  let selectedPriority = -1
+  for (const pair of allPairs(albumIds, seed)) {
+    if (seen.has(pairKey(pair[0], pair[1]))) continue
+    const probability = sigmoid((heartScores[pair[0]] ?? 0) - (heartScores[pair[1]] ?? 0))
+    const exposure = Math.sqrt((1 + (matchCounts.get(pair[0]) ?? 0)) * (1 + (matchCounts.get(pair[1]) ?? 0)))
+    const priority = probability * (1 - probability) / exposure
+    if (priority > selectedPriority + 1e-15) {
+      selected = pair
+      selectedPriority = priority
+    }
+  }
+
+  if (!selected) return completeState(albumIds, evidence, seed, completed)
   return {
-    complete: true,
-    completedComparisons: consumed,
-    totalComparisons,
-    ranking: runs[0] ?? [],
+    complete: false,
+    completedComparisons: completed,
+    totalComparisons: budget,
+    matchup: orientPair(selected, seed ^ 0x51f15e, completed),
   }
 }
 
@@ -252,21 +322,6 @@ export function getBattleState(
   decisions: readonly BattleDecision[],
 ): BattleState {
   if (mode === 'balanced') return balancedState(albumIds, seed, decisions)
-
   const schedule = mode === 'quick' ? quickSchedule(albumIds, seed) : thoroughSchedule(albumIds, seed)
-  const index = Math.min(decisions.length, schedule.length)
-  if (index >= schedule.length) {
-    return {
-      complete: true,
-      completedComparisons: index,
-      totalComparisons: schedule.length,
-      ranking: rankFromDecisions(albumIds, decisions.slice(0, schedule.length), seed, mode),
-    }
-  }
-  return {
-    complete: false,
-    completedComparisons: index,
-    totalComparisons: schedule.length,
-    matchup: orientPair(schedule[index], seed ^ 0xc0ffee, index),
-  }
+  return scheduledState(albumIds, decisions, seed, schedule)
 }

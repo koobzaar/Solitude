@@ -23,7 +23,7 @@
 </p>
 
 <p align="center">
-  <sub>Paste a wishlist → settle uncertain matches → choose a listening depth → trust your instinct.</sub>
+  <sub>Paste a wishlist → settle uncertain matches → trust your instinct → optionally listen closer.</sub>
 </p>
 
 ---
@@ -61,30 +61,85 @@ flowchart LR
     C --> D[Pick a ranking mode]
     D --> E[Battle: A or B?]
     E --> E
-    E --> F[Final priority ranking]
+    E --> F[Heart ranking]
+    F --> G{Review songs?}
+    G -->|No| H[Keep heart ranking]
+    G -->|Yes| I[Like or Love tracks]
+    I --> J[Heart · Record value · Your balance]
 ```
 
 1. **Import** — paste a plain-text list. Supported formats: `Album - Artist` (any dash variant), tab-separated columns, `Album by Artist`, or title-only lines. A global toggle swaps the Artist/Album column interpretation if your list is reversed.
 2. **Review** — each album is matched against MusicBrainz release groups using punctuation- and typo-tolerant searches. Strong matches collapse into compact confirmed rows; only ambiguous candidates stay open for review. Artwork shows a skeleton while loading and an artist-inspired fallback when no cover exists. You can edit titles, rematch, remove albums, or paste a custom HTTPS cover URL.
-3. **Battle** — choose an algorithm and start deciding. Every matchup forces a choice (no ties, no skips), with Undo, live progress, and a remaining-time estimate that learns from your actual pace.
-4. **Rank** — get the final order, revisit it anytime from the collection's history, or restart with a different mode.
+3. **Battle** — choose a depth and start deciding. Every matchup forces a choice (no ties, no skips), with reliable Undo, live progress, and a remaining-time estimate that learns from your actual pace. Quick and Thorough use seeded schedules; Balanced adapts its next matchup to the evidence so far.
+4. **Rank** — get the Bradley–Terry **Heart** order, revisit it anytime from the collection's history, or restart with a different mode.
+5. **Review songs (optional)** — take one album at a time and leave each song untouched, Like it, or Love it. Songs are not compared or ranked against one another. You may skip unheard albums, use a likely standard MusicBrainz edition, choose another edition, or enter validated totals when no tracklist is available.
+6. **Blend** — once at least one album has song evidence, switch between **Heart**, shrunk **Record value**, and **Your balance**. The live blend starts at 75% heart and 25% songs.
 
-Collections hold 2–100 unique albums. Runs can be interrupted freely — reload the page and resume exactly where you left off.
+Collections hold 2–100 unique albums. Refreshing the same tab restores Import drafts, Review, mode selection, active battles, Results, and partial track review. A new tab deliberately opens at the library.
 
 ## Ranking Modes
 
 | Mode         | Battles                     | Best for                                                                                                                                             |
 | ------------ | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Quick**    | 3 seeded round-robin rounds | Big lists where you just need the top picks. Ranks by win %, tied-group performance, and opponent strength — fast, but approximate in the middle.    |
-| **Balanced** | Up to merge-sort worst case | The recommended default. An interactive merge sort that produces a complete, confident order without exhausting you.                                 |
-| **Thorough** | Exactly `n × (n − 1) / 2`   | Small lists you care deeply about. Every pair meets exactly once; ranking uses total wins with head-to-head and strength-of-opposition tie-breakers. |
+| **Quick**    | 3 seeded round-robin rounds | Big lists where you just need the top picks. Fast and connected, but approximate in the middle.                                                      |
+| **Balanced** | Exact adaptive budget       | The recommended default. Starts with a connected comparison chain, then favors uncertain and underexposed albums.                                   |
+| **Thorough** | Exactly `n × (n − 1) / 2`   | Small lists you care deeply about. Every unique pair meets exactly once.                                                                              |
 
-Every run saves a deterministic random seed: initial order, matchup order, and left/right presentation are all rebuilt from the seed plus the decision log. Undo and Resume replay the exact same tournament instead of depending on a fragile serialized algorithm cursor.
+Every new run is marked `bt-v1` and saves a deterministic random seed. Initial order, schedule or adaptive tie-breaks, and left/right presentation are rebuilt from the seed plus the decision log. Undo and Resume therefore restore the exact matchup instead of depending on a fragile serialized algorithm cursor.
+
+Balanced uses exactly:
+
+```text
+min(all unique pairs, old merge-sort ceiling + clamp(ceil(n / 5), 10, 20))
+```
+
+The first `n − 1` choices form a seeded chain, so every album is connected to the evidence graph. Later choices never repeat a pair.
 
 The remaining-time estimate starts at four seconds per choice, then learns from the median of your latest valid choices made while the page was visible; pauses longer than 30 seconds are ignored.
 
 > [!TIP]
 > Above 40 albums, Thorough mode gets long fast — 50 albums means 1,225 battles. The app warns you and estimates the duration before you commit.
+
+## How the math works
+
+### Heart: Bradley–Terry
+
+Solitude treats each album as having a hidden heart score `θ`. The chance that album `i` beats album `j` is the logistic probability `σ(θᵢ − θⱼ)`. It fits all choices together, rather than assuming your preferences must form a perfectly transitive sort. That means a sincere cycle—A over B, B over C, C over A—is valid evidence, not corrupt data.
+
+The fit uses L2 regularization with `λ = 1`. In plain language, limited evidence is gently pulled toward neutral instead of producing extreme claims from one win. Scores are centered at zero and fitted with deterministic coordinate-Newton iterations. Seeded order breaks genuine numerical ties.
+
+Balanced estimates each unseen matchup's uncertainty with `p(1 − p)` and divides it by the square root of both albums' exposure. Close-to-50/50 pairs are informative; albums already heard many times receive less priority. This is adaptive uncertainty sampling, not a claim that the app knows what you should like.
+
+### Record value: Like, Love, and shrinkage
+
+An untouched track contributes zero, Like contributes half a normalized success, and Love contributes one: `successes = loved + 0.5 × liked`. This is the same relative weighting as Like = 1 and Love = 2, rescaled so one track's maximum is one.
+
+Sparse albums are stabilized with an eight-track Beta prior. First Solitude estimates the collection mean:
+
+```text
+μ = (sum of successes + 4) / (sum of tracks + 8)
+```
+
+Then each reviewed album receives:
+
+```text
+Tᵢ = (successesᵢ + 8μ) / (tracksᵢ + 8)
+```
+
+This shrinkage stops a two-track release with one favorite from automatically overpowering a long album backed by much more evidence. Skipped and unreviewed albums are shown separately in Record value.
+
+### Your balance: standardized blend
+
+Heart scores and Record value use different units, so each is converted to a z-score—distance from its mean in standard-deviation units—before blending:
+
+```text
+Cᵢ = w × z(θᵢ) + (1 − w) × z(Tᵢ)
+```
+
+The slider defaults to `w = 0.75`. Unreviewed albums receive a neutral song z-score of zero. The interface also calls out strong reversals where heart and song gaps point in opposite directions and both standardized gaps are at least `0.75`.
+
+> [!NOTE]
+> Heart and songs are not independent: you probably considered the music while choosing whole albums. The blend can therefore double-count some taste. Treat it as another lens, not a more objective truth.
 
 ## Getting Started
 
@@ -111,14 +166,17 @@ npm run dev
 
 ## Your Data
 
-- **Storage**: everything is saved to `localStorage` under `solitude:data:v1` (collections, runs, history) and `solitude:catalog:v2` (cached metadata searches and cover availability, 30-day expiry).
+- **Storage**: collections, `bt-v1` runs, reusable track profiles, and frozen result snapshots are saved to `localStorage` under `solitude:data:v2`. Search, cover-availability, edition, and tracklist metadata use catalog schema v3 under the stable `solitude:catalog:v2` key with a 30-day expiry.
+- **Refresh restoration**: guarded tab-only navigation is stored in `sessionStorage` under `solitude:navigation:v1`. Corrupt or stale collection/run references return safely to the library with a notice.
+- **Migration**: completed legacy rankings stay unchanged and read-only. Unfinished v1 battles are cleared once with an explanation because their old comparison cursor cannot be interpreted as Bradley–Terry evidence safely.
+- **Artwork cache**: remote Cover Art Archive and custom HTTPS image bytes use browser `CacheStorage`, never `localStorage`. An image-only service worker keeps them for seven days, limits the cache to 250 least-recently-used entries, refreshes expired art, and falls back to stale art if refresh fails. Unsupported or storage-restricted browsers continue with normal `<img>` requests.
 - **Privacy**: no data ever leaves your browser except the metadata queries sent to MusicBrainz and cover requests to the Cover Art Archive.
 - **Portability**: collections do not sync across devices and cannot be exported yet. Clearing site data erases everything.
 - **Resilience**: malformed stored state is ignored safely, and storage-quota failures are surfaced in the interface instead of failing silently.
 
 ## Metadata & Attribution
 
-Album metadata is provided by the [MusicBrainz](https://musicbrainz.org) community database, queried at ≤ 1 request/second per their [API guidelines](https://musicbrainz.org/doc/MusicBrainz_API). Searches are safely queued, common typo-tolerant matches usually need one request, and results are cached locally for 30 days. Cover images come from the [Cover Art Archive](https://coverartarchive.org), a joint project of the Internet Archive and MusicBrainz; cover checks run separately and use a designed artist-inspired fallback when the archive has none.
+Album metadata is provided by the [MusicBrainz](https://musicbrainz.org) community database, queried through one shared 1.1-second queue per their [API guidelines](https://musicbrainz.org/doc/MusicBrainz_API). Searches are safely queued, common typo-tolerant matches usually need one request, and results are cached locally for 30 days. Track review browses up to ten releases with recordings per request, selects a likely standard official edition deterministically, and only asks for more editions on demand. Cover images come from the [Cover Art Archive](https://coverartarchive.org), a joint project of the Internet Archive and MusicBrainz; cover checks run separately and use a designed artist-inspired fallback when the archive has none.
 
 Custom covers must be remote HTTPS URLs — image uploads are intentionally excluded so browser storage never fills up with binary data. Solitude bundles no album artwork or artist photography of its own; covers appear only from your catalog matches or custom URLs.
 

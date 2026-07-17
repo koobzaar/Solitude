@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { BattleRun, Collection } from './types'
-import { CATALOG_STORAGE_KEY, DATA_STORAGE_KEY, createInitialState, loadCatalogCache, loadState, saveState } from './storage'
+import { CATALOG_STORAGE_KEY, DATA_STORAGE_KEY, LEGACY_DATA_STORAGE_KEY, createInitialState, loadCatalogCache, loadState, saveState } from './storage'
+import { BATTLE_ALGORITHM_VERSION } from './types'
 
 function run(status: 'active' | 'completed'): BattleRun {
   return {
-    id: 'run-1', mode: 'balanced', seed: 7, decisions: [], status,
+    id: 'run-1', mode: 'balanced', seed: 7, algorithmVersion: BATTLE_ALGORITHM_VERSION, decisions: [], status,
     createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', paceSamples: [],
     ...(status === 'completed' ? { completedAt: '2026-01-01T00:01:00.000Z', finalRanking: ['a', 'b'] } : {}),
   }
@@ -40,15 +41,29 @@ describe('storage', () => {
     expect(loaded.state.collections[0].completedRuns[0].finalRanking).toEqual(['a', 'b'])
   })
 
+  it('migrates v1, clears interrupted legacy runs, and preserves completed history', () => {
+    const legacyCollection = collection()
+    legacyCollection.activeRun = { ...legacyCollection.activeRun!, algorithmVersion: undefined }
+    legacyCollection.completedRuns = [{ ...legacyCollection.completedRuns[0], algorithmVersion: undefined }]
+    const legacy = { version: 1, collections: [legacyCollection], learnedPaceSamples: [] }
+    const loaded = loadState({ getItem: (key) => key === LEGACY_DATA_STORAGE_KEY ? JSON.stringify(legacy) : null })
+    expect(loaded.state.version).toBe(2)
+    expect(loaded.state.collections[0].activeRun).toBeUndefined()
+    expect(loaded.state.collections[0].completedRuns[0].finalRanking).toEqual(['a', 'b'])
+    expect(loaded.notice).toMatch(/unfinished legacy battle was cleared/i)
+  })
+
   it('reports quota failures without throwing', () => {
     const setItem = vi.fn(() => { throw new DOMException('Full', 'QuotaExceededError') })
     expect(saveState(createInitialState(), { setItem })).toMatchObject({ ok: false })
     expect(setItem).toHaveBeenCalledWith(DATA_STORAGE_KEY, expect.any(String))
   })
 
-  it('uses catalog cache v2 and ignores the previous search cache', () => {
+  it('migrates catalog cache v2 to schema v3 and ignores v1', () => {
     expect(CATALOG_STORAGE_KEY).toBe('solitude:catalog:v2')
-    const storage = { getItem: () => JSON.stringify({ version: 1, entries: { stale: {} } }) }
-    expect(loadCatalogCache(storage)).toEqual({ version: 2, entries: {}, covers: {} })
+    const v2 = { getItem: () => JSON.stringify({ version: 2, entries: { kept: { expiresAt: 1, results: [] } }, covers: {} }) }
+    expect(loadCatalogCache(v2)).toEqual({ version: 3, entries: { kept: { expiresAt: 1, results: [] } }, covers: {}, tracklists: {} })
+    const v1 = { getItem: () => JSON.stringify({ version: 1, entries: { stale: {} } }) }
+    expect(loadCatalogCache(v1)).toEqual({ version: 3, entries: {}, covers: {}, tracklists: {} })
   })
 })
