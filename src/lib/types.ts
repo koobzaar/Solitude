@@ -113,7 +113,7 @@ export interface BattleRun {
   id: string
   mode: RankingMode
   seed: number
-  algorithmVersion: typeof BATTLE_ALGORITHM_VERSION
+  algorithmVersion?: typeof BATTLE_ALGORITHM_VERSION
   decisions: BattleDecision[]
   status: 'active' | 'completed'
   createdAt: string

@@ -20,7 +20,7 @@ export function Header({ onHome, trailing }: HeaderProps) {
 export function Footer() {
   return (
     <footer className="site-footer">
-      <p>Your collections stay in this browser.</p>
+      <p>Made for considered listening. Your library stays in this browser.</p>
       <p>
         Metadata by <a href="https://musicbrainz.org" target="_blank" rel="noreferrer">MusicBrainz</a>
         {' · '}Cover art by <a href="https://coverartarchive.org" target="_blank" rel="noreferrer">Cover Art Archive</a>
