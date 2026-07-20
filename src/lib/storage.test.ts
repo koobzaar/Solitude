@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { BattleRun, Collection } from './types'
-import { CATALOG_STORAGE_KEY, DATA_STORAGE_KEY, LEGACY_DATA_STORAGE_KEY, createInitialState, loadCatalogCache, loadState, saveState } from './storage'
+import { CATALOG_STORAGE_KEY, DATA_STORAGE_KEY, createInitialState, loadCatalogCache, loadState, saveState } from './storage'
 import { BATTLE_ALGORITHM_VERSION } from './types'
 
 function run(status: 'active' | 'completed'): BattleRun {
@@ -41,16 +41,10 @@ describe('storage', () => {
     expect(loaded.state.collections[0].completedRuns[0].finalRanking).toEqual(['a', 'b'])
   })
 
-  it('migrates v1, clears interrupted legacy runs, and preserves completed history', () => {
-    const legacyCollection = collection()
-    legacyCollection.activeRun = { ...legacyCollection.activeRun!, algorithmVersion: undefined }
-    legacyCollection.completedRuns = [{ ...legacyCollection.completedRuns[0], algorithmVersion: undefined }]
-    const legacy = { version: 1, collections: [legacyCollection], learnedPaceSamples: [] }
-    const loaded = loadState({ getItem: (key) => key === LEGACY_DATA_STORAGE_KEY ? JSON.stringify(legacy) : null })
-    expect(loaded.state.version).toBe(2)
-    expect(loaded.state.collections[0].activeRun).toBeUndefined()
-    expect(loaded.state.collections[0].completedRuns[0].finalRanking).toEqual(['a', 'b'])
-    expect(loaded.notice).toMatch(/unfinished legacy battle was cleared/i)
+  it('discards state from previous schema versions', () => {
+    const previous = { ...createInitialState(), version: 2, collections: [collection()] }
+    const loaded = loadState({ getItem: () => JSON.stringify(previous) })
+    expect(loaded).toEqual({ state: createInitialState(), recovered: true })
   })
 
   it('reports quota failures without throwing', () => {

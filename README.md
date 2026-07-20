@@ -64,7 +64,7 @@ flowchart LR
     E --> F[Heart ranking]
     F --> G{Review songs?}
     G -->|No| H[Keep heart ranking]
-    G -->|Yes| I[Like or Love tracks]
+    G -->|Yes| I[Like tracks]
     I --> J[Heart · Record value · Your balance]
 ```
 
@@ -72,7 +72,7 @@ flowchart LR
 2. **Review** — each album is matched against MusicBrainz release groups using punctuation- and typo-tolerant searches. Strong matches collapse into compact confirmed rows; only ambiguous candidates stay open for review. Artwork shows a skeleton while loading and an artist-inspired fallback when no cover exists. You can edit titles, rematch, remove albums, or paste a custom HTTPS cover URL.
 3. **Battle** — choose a depth and start deciding. Every matchup forces a choice (no ties, no skips), with reliable Undo, live progress, and a remaining-time estimate that learns from your actual pace. Quick and Thorough use seeded schedules; Balanced adapts its next matchup to the evidence so far.
 4. **Rank** — get the Bradley–Terry **Heart** order, revisit it anytime from the collection's history, or restart with a different mode.
-5. **Review songs (optional)** — take one album at a time and leave each song untouched, Like it, or Love it. Songs are not compared or ranked against one another. You may skip unheard albums, use a likely standard MusicBrainz edition, choose another edition, or enter validated totals when no tracklist is available.
+5. **Review songs (optional)** — take one album at a time and select the heart beside each song you like. Songs are not compared or ranked against one another. You may skip unheard albums, use a likely standard MusicBrainz edition, choose another edition, or enter validated totals when no tracklist is available.
 6. **Blend** — once at least one album has song evidence, switch between **Heart**, shrunk **Record value**, and **Your balance**. The live blend starts at 75% heart and 25% songs.
 
 Collections hold 2–100 unique albums. Refreshing the same tab restores Import drafts, Review, mode selection, active battles, Results, and partial track review. A new tab deliberately opens at the library.
@@ -110,9 +110,9 @@ The fit uses L2 regularization with `λ = 1`. In plain language, limited evidenc
 
 Balanced estimates each unseen matchup's uncertainty with `p(1 − p)` and divides it by the square root of both albums' exposure. Close-to-50/50 pairs are informative; albums already heard many times receive less priority. This is adaptive uncertainty sampling, not a claim that the app knows what you should like.
 
-### Record value: Like, Love, and shrinkage
+### Record value: Likes and shrinkage
 
-An untouched track contributes zero, Like contributes half a normalized success, and Love contributes one: `successes = loved + 0.5 × liked`. This is the same relative weighting as Like = 1 and Love = 2, rescaled so one track's maximum is one.
+An untouched track contributes zero and each liked track contributes one success: `successes = liked`. The heart beside a track toggles that binary signal.
 
 Sparse albums are stabilized with an eight-track Beta prior. First Solitude estimates the collection mean:
 
@@ -166,9 +166,9 @@ npm run dev
 
 ## Your Data
 
-- **Storage**: collections, `bt-v1` runs, reusable track profiles, and frozen result snapshots are saved to `localStorage` under `solitude:data:v2`. Search, cover-availability, edition, and tracklist metadata use catalog schema v3 under the stable `solitude:catalog:v2` key with a 30-day expiry.
+- **Storage**: collections, `bt-v1` runs, reusable track profiles, and frozen result snapshots are saved to `localStorage` under `solitude:data:v3`. Search, cover-availability, edition, and tracklist metadata use catalog schema v3 under the stable `solitude:catalog:v2` key with a 30-day expiry.
 - **Refresh restoration**: guarded tab-only navigation is stored in `sessionStorage` under `solitude:navigation:v1`. Corrupt or stale collection/run references return safely to the library with a notice.
-- **Migration**: completed legacy rankings stay unchanged and read-only. Unfinished v1 battles are cleared once with an explanation because their old comparison cursor cannot be interpreted as Bradley–Terry evidence safely.
+- **Schema changes**: pre-launch data from earlier storage schemas is intentionally discarded instead of migrated.
 - **Artwork cache**: remote Cover Art Archive and custom HTTPS image bytes use browser `CacheStorage`, never `localStorage`. An image-only service worker keeps them for seven days, limits the cache to 250 least-recently-used entries, refreshes expired art, and falls back to stale art if refresh fails. Unsupported or storage-restricted browsers continue with normal `<img>` requests.
 - **Privacy**: no data ever leaves your browser except the metadata queries sent to MusicBrainz and cover requests to the Cover Art Archive.
 - **Portability**: collections do not sync across devices and cannot be exported yet. Clearing site data erases everything.

@@ -1,4 +1,4 @@
-export const STORAGE_VERSION = 2 as const
+export const STORAGE_VERSION = 3 as const
 export const BATTLE_ALGORITHM_VERSION = 'bt-v1' as const
 
 export type MatchStatus = 'pending' | 'matched' | 'weak' | 'manual' | 'error'
@@ -44,7 +44,6 @@ export interface BattleDecision {
   durationMs: number
 }
 
-export type PositiveTrackRating = 'like' | 'love'
 export type TrackReviewState = 'reviewed' | 'skipped'
 
 export interface TrackRecording {
@@ -78,7 +77,6 @@ export interface TrackCatalogEntry {
 export interface ManualTrackSummary {
   trackCount: number
   likedCount: number
-  lovedCount: number
 }
 
 export interface AlbumTrackProfile {
@@ -87,7 +85,7 @@ export interface AlbumTrackProfile {
   editionId?: string
   editionTitle?: string
   tracks: TrackRecording[]
-  ratings: Record<string, PositiveTrackRating>
+  likedTrackIds: string[]
   manualSummary?: ManualTrackSummary
   reviewState: TrackReviewState
   updatedAt: string
@@ -101,7 +99,6 @@ export interface TrackProfileSnapshot {
   editionTitle?: string
   trackCount: number
   likedCount: number
-  lovedCount: number
   successes: number
 }
 
@@ -116,7 +113,7 @@ export interface BattleRun {
   id: string
   mode: RankingMode
   seed: number
-  algorithmVersion?: typeof BATTLE_ALGORITHM_VERSION
+  algorithmVersion: typeof BATTLE_ALGORITHM_VERSION
   decisions: BattleDecision[]
   status: 'active' | 'completed'
   createdAt: string
@@ -142,14 +139,7 @@ export interface Collection {
   completedRuns: BattleRun[]
 }
 
-export interface StoredStateV1 {
-  version: 1
-  collections: Collection[]
-  currentCollectionId?: string
-  learnedPaceSamples: number[]
-}
-
-export interface StoredStateV2 {
+export interface StoredStateV3 {
   version: typeof STORAGE_VERSION
   collections: Collection[]
   currentCollectionId?: string

@@ -17,7 +17,6 @@ export interface BattleState {
 export interface ModeDetails {
   id: RankingMode
   name: string
-  eyebrow: string
   description: string
   pro: string
   con: string
@@ -28,7 +27,6 @@ export const MODE_DETAILS: ModeDetails[] = [
   {
     id: 'quick',
     name: 'Quick',
-    eyebrow: 'A first pressing',
     description: 'Three seeded round-robin rounds, scored as one connected body of preference evidence.',
     pro: 'Fastest route to a useful shortlist.',
     con: 'The middle of the ranking is approximate.',
@@ -36,7 +34,6 @@ export const MODE_DETAILS: ModeDetails[] = [
   {
     id: 'balanced',
     name: 'Balanced',
-    eyebrow: 'The house favorite',
     description: 'An adaptive battle that spends its fixed budget on uncertain, under-heard matchups.',
     pro: 'Excellent balance of speed and confidence.',
     con: 'Not every possible pair meets directly.',
@@ -45,7 +42,6 @@ export const MODE_DETAILS: ModeDetails[] = [
   {
     id: 'thorough',
     name: 'Thorough',
-    eyebrow: 'The deep listen',
     description: 'Every unique pair faces off exactly once.',
     pro: 'Maximum direct comparison coverage.',
     con: 'Large collections take a long time.',

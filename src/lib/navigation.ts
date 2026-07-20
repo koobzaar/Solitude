@@ -1,4 +1,4 @@
-import type { RankingMode, StoredStateV2 } from './types'
+import type { RankingMode, StoredStateV3 } from './types'
 
 export const NAVIGATION_STORAGE_KEY = 'solitude:navigation:v1'
 
@@ -42,7 +42,7 @@ function parseNavigation(value: unknown): NavigationStateV1 | undefined {
   return candidate as NavigationStateV1
 }
 
-export function validateNavigation(navigation: NavigationStateV1, state: StoredStateV2): boolean {
+export function validateNavigation(navigation: NavigationStateV1, state: StoredStateV3): boolean {
   if (navigation.screen === 'library') return true
   const collection = state.collections.find((candidate) => candidate.id === navigation.collectionId)
   if (!collection) return false
@@ -58,7 +58,7 @@ export function validateNavigation(navigation: NavigationStateV1, state: StoredS
 }
 
 export function loadNavigation(
-  state: StoredStateV2,
+  state: StoredStateV3,
   storage: Pick<Storage, 'getItem'> = sessionStorage,
 ): NavigationLoadResult {
   try {

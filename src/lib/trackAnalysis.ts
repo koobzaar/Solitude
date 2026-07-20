@@ -16,12 +16,10 @@ export function albumProfileKey(album: Pick<Album, 'releaseGroupId' | 'title' | 
 }
 
 export function validateManualSummary(summary: ManualTrackSummary): string | undefined {
-  const values = [summary.trackCount, summary.likedCount, summary.lovedCount]
+  const values = [summary.trackCount, summary.likedCount]
   if (values.some((value) => !Number.isInteger(value) || value < 0)) return 'Use whole numbers of zero or more.'
   if (summary.trackCount < 1) return 'Enter at least one track.'
-  if (summary.likedCount + summary.lovedCount > summary.trackCount) {
-    return 'Liked and loved tracks are separate, so together they cannot exceed the track total.'
-  }
+  if (summary.likedCount > summary.trackCount) return 'Liked tracks cannot exceed the track total.'
   return undefined
 }
 
@@ -33,32 +31,24 @@ export function snapshotProfile(albumId: string, profile: AlbumTrackProfile): Tr
       source: 'skipped',
       trackCount: 0,
       likedCount: 0,
-      lovedCount: 0,
       successes: 0,
     }
   }
 
   if (profile.manualSummary) {
-    const { trackCount, likedCount, lovedCount } = profile.manualSummary
+    const { trackCount, likedCount } = profile.manualSummary
     return {
       albumId,
       reviewState: 'reviewed',
       source: 'manual',
       trackCount,
       likedCount,
-      lovedCount,
-      successes: lovedCount + 0.5 * likedCount,
+      successes: likedCount,
     }
   }
 
   const trackIds = new Set(profile.tracks.map((track) => track.id))
-  let likedCount = 0
-  let lovedCount = 0
-  for (const [trackId, rating] of Object.entries(profile.ratings)) {
-    if (!trackIds.has(trackId)) continue
-    if (rating === 'love') lovedCount += 1
-    else if (rating === 'like') likedCount += 1
-  }
+  const likedCount = new Set(profile.likedTrackIds.filter((trackId) => trackIds.has(trackId))).size
   return {
     albumId,
     reviewState: 'reviewed',
@@ -67,8 +57,7 @@ export function snapshotProfile(albumId: string, profile: AlbumTrackProfile): Tr
     editionTitle: profile.editionTitle,
     trackCount: profile.tracks.length,
     likedCount,
-    lovedCount,
-    successes: lovedCount + 0.5 * likedCount,
+    successes: likedCount,
   }
 }
 

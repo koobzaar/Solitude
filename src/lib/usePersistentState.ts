@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
 import { loadState, saveState } from './storage'
-import type { StoredStateV2 } from './types'
+import type { StoredStateV3 } from './types'
 
 export function usePersistentState(): {
-  state: StoredStateV2
-  setState: React.Dispatch<React.SetStateAction<StoredStateV2>>
+  state: StoredStateV3
+  setState: React.Dispatch<React.SetStateAction<StoredStateV3>>
   notice?: string
   clearNotice: () => void
   showNotice: (message: string) => void

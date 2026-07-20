@@ -8,25 +8,25 @@ const albums: Album[] = [
   { id: 'c', title: 'C', artist: 'Artist', sourceText: 'C', matchStatus: 'manual' },
 ]
 
-function manual(album: Album, trackCount: number, likedCount: number, lovedCount: number): AlbumTrackProfile {
+function manual(album: Album, trackCount: number, likedCount: number): AlbumTrackProfile {
   return {
-    albumKey: albumProfileKey(album), tracks: [], ratings: {}, reviewState: 'reviewed', updatedAt: '2026-01-01',
-    manualSummary: { trackCount, likedCount, lovedCount },
+    albumKey: albumProfileKey(album), tracks: [], likedTrackIds: [], reviewState: 'reviewed', updatedAt: '2026-01-01',
+    manualSummary: { trackCount, likedCount },
   }
 }
 
 describe('track analysis', () => {
-  it('validates disjoint manual counts', () => {
-    expect(validateManualSummary({ trackCount: 10, likedCount: 4, lovedCount: 3 })).toBeUndefined()
-    expect(validateManualSummary({ trackCount: 5, likedCount: 4, lovedCount: 2 })).toMatch(/cannot exceed/i)
-    expect(validateManualSummary({ trackCount: 4.5, likedCount: 1, lovedCount: 1 })).toMatch(/whole numbers/i)
+  it('validates manual like counts', () => {
+    expect(validateManualSummary({ trackCount: 10, likedCount: 4 })).toBeUndefined()
+    expect(validateManualSummary({ trackCount: 5, likedCount: 6 })).toMatch(/cannot exceed/i)
+    expect(validateManualSummary({ trackCount: 4.5, likedCount: 1 })).toMatch(/whole numbers/i)
   })
 
-  it('uses normalized Like/Love evidence and eight-track shrinkage', () => {
+  it('counts each Like as one success and applies eight-track shrinkage', () => {
     const profiles = {
-      [albumProfileKey(albums[0])]: manual(albums[0], 10, 4, 2),
-      [albumProfileKey(albums[1])]: manual(albums[1], 10, 0, 1),
-      [albumProfileKey(albums[2])]: { ...manual(albums[2], 10, 0, 0), reviewState: 'skipped' as const },
+      [albumProfileKey(albums[0])]: manual(albums[0], 10, 4),
+      [albumProfileKey(albums[1])]: manual(albums[1], 10, 1),
+      [albumProfileKey(albums[2])]: { ...manual(albums[2], 10, 0), reviewState: 'skipped' as const },
     }
     const snapshot = buildTrackAnalysisSnapshot(albums, profiles, 'now')
     expect(snapshot.profiles.a.successes).toBe(4)
@@ -34,6 +34,20 @@ describe('track analysis', () => {
     expect(snapshot.recordScores.a).toBeCloseTo((4 + 8 * (9 / 28)) / 18)
     expect(snapshot.recordScores.b).toBeCloseTo((1 + 8 * (9 / 28)) / 18)
     expect(snapshot.recordScores.c).toBeUndefined()
+  })
+
+  it('counts only unique liked tracks from the selected catalog edition', () => {
+    const profile: AlbumTrackProfile = {
+      albumKey: albumProfileKey(albums[0]),
+      tracks: [
+        { id: 'track-1', title: 'One', position: 1, mediumPosition: 1 },
+        { id: 'track-2', title: 'Two', position: 2, mediumPosition: 1 },
+      ],
+      likedTrackIds: ['track-1', 'track-1', 'missing'],
+      reviewState: 'reviewed',
+      updatedAt: '2026-01-01',
+    }
+    expect(buildTrackAnalysisSnapshot([albums[0]], { [albumProfileKey(albums[0])]: profile }).profiles.a).toMatchObject({ likedCount: 1, successes: 1 })
   })
 
   it('handles zero variance, neutral unreviewed albums, slider endpoints, and disagreements', () => {

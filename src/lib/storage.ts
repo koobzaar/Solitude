@@ -1,13 +1,12 @@
-import type { CatalogCacheV3, Collection, StoredStateV1, StoredStateV2 } from './types'
-import { BATTLE_ALGORITHM_VERSION, STORAGE_VERSION } from './types'
+import type { CatalogCacheV3, Collection, StoredStateV3 } from './types'
+import { STORAGE_VERSION } from './types'
 
-export const DATA_STORAGE_KEY = 'solitude:data:v2'
-export const LEGACY_DATA_STORAGE_KEY = 'solitude:data:v1'
+export const DATA_STORAGE_KEY = 'solitude:data:v3'
 // The cache key stays stable so v2 search and cover metadata can migrate in place.
 export const CATALOG_STORAGE_KEY = 'solitude:catalog:v2'
 
 export interface LoadResult {
-  state: StoredStateV2
+  state: StoredStateV3
   recovered: boolean
   notice?: string
 }
@@ -17,7 +16,7 @@ export interface SaveResult {
   error?: string
 }
 
-export function createInitialState(): StoredStateV2 {
+export function createInitialState(): StoredStateV3 {
   return {
     version: STORAGE_VERSION,
     collections: [],
@@ -37,9 +36,9 @@ function hasValidCollections(value: unknown): value is Collection[] {
   )
 }
 
-function isStoredStateV2(value: unknown): value is StoredStateV2 {
+function isStoredStateV3(value: unknown): value is StoredStateV3 {
   if (!value || typeof value !== 'object') return false
-  const candidate = value as Partial<StoredStateV2>
+  const candidate = value as Partial<StoredStateV3>
   return (
     candidate.version === STORAGE_VERSION &&
     hasValidCollections(candidate.collections) &&
@@ -49,65 +48,17 @@ function isStoredStateV2(value: unknown): value is StoredStateV2 {
   )
 }
 
-function isStoredStateV1(value: unknown): value is StoredStateV1 {
-  if (!value || typeof value !== 'object') return false
-  const candidate = value as Partial<StoredStateV1>
-  return candidate.version === 1 && hasValidCollections(candidate.collections) && Array.isArray(candidate.learnedPaceSamples)
-}
-
-function clearLegacyActiveRuns(collections: readonly Collection[]): { collections: Collection[]; cleared: boolean } {
-  let cleared = false
-  return {
-    collections: collections.map((collection) => {
-      if (!collection.activeRun || collection.activeRun.algorithmVersion === BATTLE_ALGORITHM_VERSION) return collection
-      cleared = true
-      return { ...collection, activeRun: undefined }
-    }),
-    cleared,
-  }
-}
-
-function migrateV1(state: StoredStateV1): LoadResult {
-  const migrated = clearLegacyActiveRuns(state.collections)
-  return {
-    state: {
-      version: STORAGE_VERSION,
-      collections: migrated.collections,
-      currentCollectionId: state.currentCollectionId,
-      learnedPaceSamples: state.learnedPaceSamples,
-      trackProfiles: {},
-    },
-    recovered: false,
-    notice: migrated.cleared
-      ? 'Solitude upgraded its ranking model. One unfinished legacy battle was cleared; completed rankings are still in your history.'
-      : undefined,
-  }
-}
-
 function parseState(raw: string): LoadResult | undefined {
   const parsed: unknown = JSON.parse(raw)
-  if (isStoredStateV1(parsed)) return migrateV1(parsed)
-  if (!isStoredStateV2(parsed)) return undefined
-  const normalized = clearLegacyActiveRuns(parsed.collections)
-  return {
-    state: normalized.cleared ? { ...parsed, collections: normalized.collections } : parsed,
-    recovered: false,
-    notice: normalized.cleared
-      ? 'Solitude upgraded its ranking model. One unfinished legacy battle was cleared; completed rankings are still in your history.'
-      : undefined,
-  }
+  if (!isStoredStateV3(parsed)) return undefined
+  return { state: parsed, recovered: false }
 }
 
 export function loadState(storage: Pick<Storage, 'getItem'> = localStorage): LoadResult {
   try {
     const current = storage.getItem(DATA_STORAGE_KEY)
-    if (current) {
-      const loaded = parseState(current)
-      return loaded ?? { state: createInitialState(), recovered: true }
-    }
-    const legacy = storage.getItem(LEGACY_DATA_STORAGE_KEY)
-    if (!legacy) return { state: createInitialState(), recovered: false }
-    const loaded = parseState(legacy)
+    if (!current) return { state: createInitialState(), recovered: false }
+    const loaded = parseState(current)
     return loaded ?? { state: createInitialState(), recovered: true }
   } catch {
     return { state: createInitialState(), recovered: true }
@@ -115,7 +66,7 @@ export function loadState(storage: Pick<Storage, 'getItem'> = localStorage): Loa
 }
 
 export function saveState(
-  state: StoredStateV2,
+  state: StoredStateV3,
   storage: Pick<Storage, 'setItem'> = localStorage,
 ): SaveResult {
   try {

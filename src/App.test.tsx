@@ -2,36 +2,70 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import App from './App'
+import { NAVIGATION_STORAGE_KEY } from './lib/navigation'
 import { CATALOG_STORAGE_KEY, DATA_STORAGE_KEY } from './lib/storage'
 
-async function reachBattle(albumLines: string) {
+function expectSingleH1(name: RegExp) {
+  expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
+  expect(screen.getByRole('heading', { level: 1, name })).toBeInTheDocument()
+}
+
+async function reachMode(albumLines: string) {
   const user = userEvent.setup()
   render(<App />)
-  await user.click(screen.getByRole('button', { name: /start a ranking/i }))
-  await user.type(await screen.findByLabelText(/name this collection/i), 'Sunday shelf')
-  await user.click(screen.getByRole('button', { name: /add your records/i }))
+  expectSingleH1(/put your vinyl wishlist in buying order/i)
+  await user.click(screen.getByRole('button', { name: /rank a wishlist/i }))
+  expectSingleH1(/name this wishlist/i)
+  await user.type(await screen.findByLabelText(/wishlist name/i), 'Sunday shelf')
+  await user.click(screen.getByRole('button', { name: /continue to import/i }))
+  expectSingleH1(/paste 2–100 records/i)
   const textarea = await screen.findByLabelText(/album list/i)
   await user.type(textarea, albumLines)
   const albumCount = albumLines.split('\n').length
   await user.click(screen.getByRole('button', { name: new RegExp(`Review ${albumCount} albums`, 'i') }))
-  expect(await screen.findByRole('heading', { name: /review your records/i })).toBeInTheDocument()
-  await user.click(await screen.findByRole('button', { name: /choose ranking mode/i }))
-  await user.click(await screen.findByRole('button', { name: /begin balanced battle/i }))
-  await screen.findByRole('heading', { name: /which record comes first/i })
+  await screen.findByRole('heading', { name: /confirm the catalog matches/i })
+  expectSingleH1(/confirm the catalog matches/i)
+  await user.click(await screen.findByRole('button', { name: /choose comparison depth/i }))
+  await screen.findByRole('heading', { name: /choose how many comparisons to make/i })
+  expectSingleH1(/choose how many comparisons to make/i)
+  return user
+}
+
+async function reachBattle(albumLines: string) {
+  const user = await reachMode(albumLines)
+  await user.click(await screen.findByRole('button', { name: /start balanced ranking/i }))
+  await screen.findByRole('heading', { name: /which record would you buy first/i })
+  expectSingleH1(/which record would you buy first/i)
   return user
 }
 
 describe('Solitude app flow', () => {
   it('moves from import through review and accepts keyboard album choices', async () => {
     await reachBattle('Blue Train - John Coltrane\nKind of Blue - Miles Davis')
-    expect(screen.getByRole('heading', { name: /which record comes first/i })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /which record would you buy first/i })).toBeInTheDocument()
     fireEvent.keyDown(window, { key: 'ArrowLeft' })
 
-    expect(await screen.findByRole('heading', { name: /your next record is clear/i })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: /first on your list:/i })).toBeInTheDocument()
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
     expect(screen.getAllByRole('listitem')).toHaveLength(2)
     const stored = JSON.parse(localStorage.getItem(DATA_STORAGE_KEY) ?? '{}')
     expect(stored.collections[0].completedRuns).toHaveLength(1)
     expect(stored.collections[0].activeRun).toBeUndefined()
+  })
+
+  it('uses native comparison-depth radios with keyboard selection', async () => {
+    const user = await reachMode('A - Artist A\nB - Artist B\nC - Artist C')
+    const quick = screen.getByRole('radio', { name: /^quick/i })
+    const balanced = screen.getByRole('radio', { name: /^balanced/i })
+    const thorough = screen.getByRole('radio', { name: /^thorough/i })
+
+    expect(balanced).toBeChecked()
+    expect(quick).toHaveAccessibleName(/comparisons.*estimated time/i)
+    await user.click(quick)
+    expect(quick).toBeChecked()
+    await user.keyboard('{ArrowDown}')
+    expect(balanced).toBeChecked()
+    expect(thorough).not.toBeChecked()
   })
 
   it('locks utilities during animation, then Undo restores an immediately usable matchup', async () => {
@@ -41,13 +75,13 @@ describe('Solitude app flow', () => {
     expect(screen.getByRole('button', { name: /undo/i })).toBeDisabled()
     expect(screen.getByRole('button', { name: /restart/i })).toBeDisabled()
     expect(screen.getByRole('button', { name: /save & exit/i })).toBeDisabled()
-    await waitFor(() => expect(document.querySelector('.battle-progress__labels span')?.textContent).toContain('Battle 2'))
+    await waitFor(() => expect(document.querySelector('.battle-progress__labels span')?.textContent).toContain('Comparison 2'))
 
     await user.click(screen.getByRole('button', { name: /undo/i }))
-    await waitFor(() => expect(document.querySelector('.battle-progress__labels span')?.textContent).toContain('Battle 1'))
+    await waitFor(() => expect(document.querySelector('.battle-progress__labels span')?.textContent).toContain('Comparison 1'))
     expect(document.querySelector('.battle-page .sr-only')?.textContent).toBe(originalMatchup)
     fireEvent.keyDown(window, { key: 'ArrowRight' })
-    await waitFor(() => expect(document.querySelector('.battle-progress__labels span')?.textContent).toContain('Battle 2'))
+    await waitFor(() => expect(document.querySelector('.battle-progress__labels span')?.textContent).toContain('Comparison 2'))
   })
 
   it('restores the exact active battle after a same-tab reload and still supports Save & exit', async () => {
@@ -57,27 +91,27 @@ describe('Solitude app flow', () => {
     cleanup()
     render(<App />)
 
-    await screen.findByRole('heading', { name: /which record comes first/i })
-    expect(document.querySelector('.battle-progress__labels span')?.textContent).toContain('Battle 2')
+    await screen.findByRole('heading', { name: /which record would you buy first/i })
+    expect(document.querySelector('.battle-progress__labels span')?.textContent).toContain('Comparison 2')
 
     const user = userEvent.setup()
     await user.click(screen.getByRole('button', { name: /save & exit/i }))
     const resume = await screen.findByRole('button', { name: /resume/i })
     await user.click(resume)
-    expect(await screen.findByRole('heading', { name: /which record comes first/i })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: /which record would you buy first/i })).toBeInTheDocument()
   })
 
   it('keeps song review optional and builds Record value from manual summaries', async () => {
     const user = await reachBattle('A - Artist A\nB - Artist B')
     fireEvent.keyDown(window, { key: 'ArrowLeft' })
-    expect(await screen.findByRole('heading', { name: /your next record is clear/i })).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: /go deeper with the songs/i })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: /first on your list:/i })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /add song evidence/i })).toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: /review the songs/i }))
-    expect(await screen.findByRole('heading', { name: /keep the songs that stay with you/i })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /add song evidence/i }))
+    expect(await screen.findByRole('heading', { name: /mark the songs you want to hear again/i })).toBeInTheDocument()
     await user.type(screen.getByLabelText(/total tracks/i), '10')
     await user.type(screen.getByLabelText(/liked tracks/i), '4')
-    await user.type(screen.getByLabelText(/loved tracks/i), '2')
+    expect(screen.queryByLabelText(/loved tracks/i)).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /save & next album/i }))
     await user.click(screen.getByRole('button', { name: /skip unheard album/i }))
 
@@ -87,10 +121,67 @@ describe('Solitude app flow', () => {
     await waitFor(() => {
       const stored = JSON.parse(localStorage.getItem(DATA_STORAGE_KEY) ?? '{}')
       expect(Object.keys(stored.collections[0].completedRuns[0].trackAnalysis.recordScores)).toHaveLength(1)
+      expect(Object.values(stored.collections[0].completedRuns[0].trackAnalysis.profiles)).toContainEqual(expect.objectContaining({ reviewState: 'reviewed', likedCount: 4, successes: 4 }))
     })
   })
 
-  it('renders safely for people who prefer reduced motion', () => {
+  it('uses a single accessible heart toggle for catalog tracks', async () => {
+    const timestamp = '2026-07-16T12:00:00.000Z'
+    const albums = [
+      { id: 'a', title: 'A', artist: 'Artist A', sourceText: 'A - Artist A', matchStatus: 'matched', releaseGroupId: 'release-group-a' },
+      { id: 'b', title: 'B', artist: 'Artist B', sourceText: 'B - Artist B', matchStatus: 'manual' },
+    ]
+    localStorage.setItem(DATA_STORAGE_KEY, JSON.stringify({
+      version: 3,
+      learnedPaceSamples: [],
+      currentCollectionId: 'collection-1',
+      trackProfiles: {},
+      collections: [{
+        id: 'collection-1', name: 'Heart controls', albums, createdAt: timestamp, updatedAt: timestamp,
+        completedRuns: [{
+          id: 'run-1', mode: 'balanced', seed: 1, algorithmVersion: 'bt-v1', decisions: [], status: 'completed',
+          createdAt: timestamp, updatedAt: timestamp, completedAt: timestamp, paceSamples: [], finalRanking: ['a', 'b'], albumSnapshot: albums,
+        }],
+      }],
+    }))
+    localStorage.setItem(CATALOG_STORAGE_KEY, JSON.stringify({
+      version: 3, entries: {}, covers: {}, tracklists: {
+        'release-group-a:0': {
+          expiresAt: Date.now() + 60_000,
+          result: {
+            releaseGroupId: 'release-group-a', offset: 0, releaseCount: 1, hasMore: false,
+            editions: [{
+              id: 'edition-a', title: 'Standard edition', trackCount: 2,
+              tracks: [
+                { id: 'track-1', title: 'First Song', position: 1, mediumPosition: 1 },
+                { id: 'track-2', title: 'Second Song', position: 2, mediumPosition: 1 },
+              ],
+            }],
+          },
+        },
+      },
+    }))
+    sessionStorage.setItem(NAVIGATION_STORAGE_KEY, JSON.stringify({
+      version: 1, screen: 'track-review', collectionId: 'collection-1', runId: 'run-1', trackReviewAlbumId: 'a',
+    }))
+
+    const user = userEvent.setup()
+    render(<App />)
+    const like = await screen.findByRole('button', { name: /like first song/i })
+    expect(like).toHaveAttribute('aria-pressed', 'false')
+    expect(like).toHaveTextContent('')
+    expect(screen.queryByRole('button', { name: /^love/i })).not.toBeInTheDocument()
+
+    await user.click(like)
+    expect(screen.getByRole('button', { name: /unlike first song/i })).toHaveAttribute('aria-pressed', 'true')
+    await user.click(screen.getByRole('button', { name: /save & next album/i }))
+    await waitFor(() => {
+      const stored = JSON.parse(localStorage.getItem(DATA_STORAGE_KEY) ?? '{}')
+      expect(stored.trackProfiles['mb:release-group-a'].likedTrackIds).toEqual(['track-1'])
+    })
+  })
+
+  it('commits immediately for people who prefer reduced motion', async () => {
     const matchMedia = vi.fn().mockImplementation((query: string) => ({
       matches: query.includes('prefers-reduced-motion'),
       media: query,
@@ -100,20 +191,21 @@ describe('Solitude app flow', () => {
       removeListener: vi.fn(),
     }))
     Object.defineProperty(window, 'matchMedia', { configurable: true, value: matchMedia })
-    render(<App />)
-    expect(screen.getByRole('heading', { name: /what deserves thenext spin/i })).toBeInTheDocument()
+    const user = await reachBattle('A - Artist A\nB - Artist B')
+    await user.click(document.querySelectorAll<HTMLButtonElement>('.choice-card')[0])
+    expect(screen.getByRole('heading', { name: /first on your list:/i })).toBeInTheDocument()
     expect(matchMedia('(prefers-reduced-motion: reduce)').matches).toBe(true)
   })
 
   it('automatically corrects strong fuzzy matches and explains missing archive covers', async () => {
     const user = userEvent.setup()
     render(<App />)
-    await user.click(screen.getByRole('button', { name: /start a ranking/i }))
-    await user.type(await screen.findByLabelText(/name this collection/i), 'Corrected shelf')
-    await user.click(screen.getByRole('button', { name: /add your records/i }))
+    await user.click(screen.getByRole('button', { name: /rank a wishlist/i }))
+    await user.type(await screen.findByLabelText(/wishlist name/i), 'Corrected shelf')
+    await user.click(screen.getByRole('button', { name: /continue to import/i }))
     await user.type(await screen.findByLabelText(/album list/i), 'I love you. - The neighborhood\nInside In / Inside Out - The Kooks')
     await user.click(screen.getByRole('button', { name: /review 2 albums/i }))
-    expect(await screen.findByRole('heading', { name: /review your records/i })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: /confirm the catalog matches/i })).toBeInTheDocument()
 
     const now = Date.now()
     localStorage.setItem(CATALOG_STORAGE_KEY, JSON.stringify({
@@ -147,7 +239,7 @@ describe('Solitude app flow', () => {
     expect(screen.getByText(/The Neighbourhood/)).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Inside In/Inside Out' })).toBeInTheDocument()
     expect(screen.getByText(/auto-corrected · 98%/i)).toBeInTheDocument()
-    expect(screen.getByText(/no archive cover—showing an artist-inspired fallback/i)).toBeInTheDocument()
+    expect(screen.getByText(/no archive cover\. an artist fallback is shown/i)).toBeInTheDocument()
     expect(screen.queryByLabelText(/matches for/i)).not.toBeInTheDocument()
 
     await user.click(screen.getAllByRole('button', { name: /edit details/i })[0])
@@ -163,12 +255,12 @@ describe('Solitude app flow', () => {
   it('collapses confident matches and only exposes candidates for unresolved records', async () => {
     const user = userEvent.setup()
     render(<App />)
-    await user.click(screen.getByRole('button', { name: /start a ranking/i }))
-    await user.type(await screen.findByLabelText(/name this collection/i), 'Mixed certainty')
-    await user.click(screen.getByRole('button', { name: /add your records/i }))
+    await user.click(screen.getByRole('button', { name: /rank a wishlist/i }))
+    await user.type(await screen.findByLabelText(/wishlist name/i), 'Mixed certainty')
+    await user.click(screen.getByRole('button', { name: /continue to import/i }))
     await user.type(await screen.findByLabelText(/album list/i), 'Exact Album - Exact Artist\nUncertain Album - Uncertain Artist')
     await user.click(screen.getByRole('button', { name: /review 2 albums/i }))
-    await screen.findByRole('heading', { name: /review your records/i })
+    await screen.findByRole('heading', { name: /confirm the catalog matches/i })
 
     const now = Date.now()
     const exact = {
@@ -197,17 +289,18 @@ describe('Solitude app flow', () => {
   it('uses the redesigned empty state and stores optional collection context', async () => {
     const user = userEvent.setup()
     render(<App />)
-    expect(screen.getByRole('heading', { name: /your shelf is quiet/i })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /no saved collections/i })).toBeInTheDocument()
     expect(screen.getByText(/0 collections · saved on this device/i)).toBeInTheDocument()
+    expect(screen.getByText(/paste 2–100 records.*no account.*stay in this browser/i)).toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: /create your first collection/i }))
-    expect(await screen.findByRole('heading', { name: /let’s set the stage/i })).toBeInTheDocument()
-    await user.type(screen.getByLabelText(/name this collection/i), 'Winter records')
+    await user.click(screen.getByRole('button', { name: /create a wishlist/i }))
+    expect(await screen.findByRole('heading', { name: /name this wishlist/i })).toBeInTheDocument()
+    await user.type(screen.getByLabelText(/wishlist name/i), 'Winter records')
     await user.click(screen.getByRole('button', { name: /rainy day/i }))
-    await user.type(screen.getByLabelText(/note to your future self/i), 'For slow Sundays')
-    await user.click(screen.getByRole('button', { name: /add your records/i }))
+    await user.type(screen.getByLabelText(/^note/i), 'For slow Sundays')
+    await user.click(screen.getByRole('button', { name: /continue to import/i }))
 
-    expect(await screen.findByRole('heading', { name: /paste your wishlist/i })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: /paste 2–100 records/i })).toBeInTheDocument()
     await waitFor(() => {
       const stored = JSON.parse(localStorage.getItem(DATA_STORAGE_KEY) ?? '{}')
       expect(stored.collections[0]).toMatchObject({ name: 'Winter records', vibe: 'Rainy day', note: 'For slow Sundays' })
@@ -217,9 +310,10 @@ describe('Solitude app flow', () => {
   it('keeps rename, delete, and completed-history controls on redesigned cards', async () => {
     const timestamp = '2026-07-16T12:00:00.000Z'
     localStorage.setItem(DATA_STORAGE_KEY, JSON.stringify({
-      version: 1,
+      version: 3,
       learnedPaceSamples: [],
       currentCollectionId: 'collection-1',
+      trackProfiles: {},
       collections: [{
         id: 'collection-1', name: 'Original name', albums: [
           { id: 'a', title: 'A', artist: 'Artist A', sourceText: 'A - Artist A', matchStatus: 'manual' },
@@ -227,7 +321,7 @@ describe('Solitude app flow', () => {
         ],
         createdAt: timestamp, updatedAt: timestamp,
         completedRuns: [{
-          id: 'run-1', mode: 'balanced', seed: 1, decisions: [], status: 'completed', createdAt: timestamp,
+          id: 'run-1', mode: 'balanced', seed: 1, algorithmVersion: 'bt-v1', decisions: [], status: 'completed', createdAt: timestamp,
           updatedAt: timestamp, completedAt: timestamp, paceSamples: [], finalRanking: ['a', 'b'],
         }],
       }],
@@ -246,14 +340,15 @@ describe('Solitude app flow', () => {
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
     await user.click(screen.getByRole('button', { name: /delete renamed shelf/i }))
     expect(confirm).toHaveBeenCalledOnce()
-    expect(await screen.findByRole('heading', { name: /your shelf is quiet/i })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: /no saved collections/i })).toBeInTheDocument()
   })
 
   it('uses deterministic stored covers without skipping a first-album placeholder', () => {
     const timestamp = '2026-07-16T12:00:00.000Z'
     localStorage.setItem(DATA_STORAGE_KEY, JSON.stringify({
-      version: 1,
+      version: 3,
       learnedPaceSamples: [],
+      trackProfiles: {},
       collections: [{
         id: 'covers', name: 'Cover shelf', createdAt: timestamp, updatedAt: timestamp, completedRuns: [],
         albums: [
