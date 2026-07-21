@@ -20,12 +20,26 @@ interface HeaderProps {
 
 export function Header({ onHome, trailing }: HeaderProps) {
   const { t } = useTranslation()
+  const lyricLines = ['stable', 'memory', 'despair', 'gloom', 'prayer']
+    .flatMap((passage) => t(`lyrics.${passage}`).split('\n'))
+  const lyricDuration = `${lyricLines.length * 3.2}s`
   return (
     <header className="site-header">
-      <button className="wordmark" type="button" onClick={onHome} aria-label={t('shell.homeLabel')}>
-        <span className="wordmark-mark" aria-hidden="true"><i /></span>
-        <span>Solitude</span>
-      </button>
+      <div className="header-brand">
+        <button className="wordmark" type="button" onClick={onHome} aria-label={t('shell.homeLabel')}>
+          <span className="wordmark-mark" aria-hidden="true"><i /></span>
+          <span>Solitude</span>
+        </button>
+        <span className="header-lyric" aria-hidden="true">
+          {lyricLines.map((line, index) => (
+            <span
+              className="header-lyric__line"
+              key={`${line}-${index}`}
+              style={{ animationDelay: `${index * 3.2}s`, animationDuration: lyricDuration }}
+            >{line}</span>
+          ))}
+        </span>
+      </div>
       <div className="header-trailing">{trailing}<LanguageToggle /></div>
     </header>
   )

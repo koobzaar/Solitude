@@ -86,9 +86,9 @@ describe('localized application', () => {
 
     await user.click(screen.getByRole('button', { name: /criar um ranking/i }))
     await user.type(await screen.findByLabelText(/nome da coleção/i), 'Discos de teste')
-    await user.click(screen.getByRole('button', { name: /dia chuvoso/i }))
+    expect(screen.queryByRole('button', { name: /dia chuvoso/i })).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /adicionar discos/i }))
-    await waitFor(() => expect(JSON.parse(localStorage.getItem('solitude:data:v3') ?? '{}').collections[0].vibe).toBe('Rainy day'))
+    await waitFor(() => expect(JSON.parse(localStorage.getItem('solitude:data:v3') ?? '{}').collections[0]).not.toHaveProperty('vibe'))
 
     const list = await screen.findByLabelText(/lista de álbuns/i)
     await user.type(list, ' - Artista\nSegundo - Artista B')

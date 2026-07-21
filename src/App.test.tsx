@@ -411,7 +411,7 @@ describe('Solitude app flow', () => {
     expect(screen.getAllByLabelText(/matches for/i)).toHaveLength(1)
   })
 
-  it('uses the redesigned empty state and stores optional collection context', async () => {
+  it('stores an optional collection note without offering a collection climate', async () => {
     const user = userEvent.setup()
     render(<App />)
     expect(screen.getByRole('heading', { name: /your shelf is quiet/i })).toBeInTheDocument()
@@ -420,15 +420,29 @@ describe('Solitude app flow', () => {
     await user.click(screen.getByRole('button', { name: /create your first collection/i }))
     expect(await screen.findByRole('heading', { name: /let’s set the stage/i })).toBeInTheDocument()
     await user.type(screen.getByLabelText(/name this collection/i), 'Winter records')
-    await user.click(screen.getByRole('button', { name: /rainy day/i }))
+    expect(screen.queryByRole('button', { name: /rainy day/i })).not.toBeInTheDocument()
     await user.type(screen.getByLabelText(/note to your future self/i), 'For slow Sundays')
     await user.click(screen.getByRole('button', { name: /add your records/i }))
 
     expect(await screen.findByRole('heading', { name: /paste your wishlist/i })).toBeInTheDocument()
     await waitFor(() => {
       const stored = JSON.parse(localStorage.getItem(DATA_STORAGE_KEY) ?? '{}')
-      expect(stored.collections[0]).toMatchObject({ name: 'Winter records', vibe: 'Rainy day', note: 'For slow Sundays' })
+      expect(stored.collections[0]).toMatchObject({ name: 'Winter records', note: 'For slow Sundays' })
+      expect(stored.collections[0]).not.toHaveProperty('vibe')
     })
+  })
+
+  it('fades the supplied lyric lines beside the wordmark', () => {
+    render(<App />)
+    const lyric = document.querySelector('.header-lyric')
+    const lines = Array.from(document.querySelectorAll<HTMLElement>('.header-lyric__line'))
+
+    expect(lyric).toHaveAttribute('aria-hidden', 'true')
+    expect(lines).toHaveLength(18)
+    expect(lines[0]).toHaveTextContent('In my solitude')
+    expect(lines[1]).toHaveTextContent('You haunt me')
+    expect(lines[17]).toHaveTextContent('Send back my love')
+    expect(lines[1]).toHaveStyle({ animationDelay: '3.2s' })
   })
 
   it('keeps rename, delete, and completed-history controls on redesigned cards', async () => {
@@ -439,7 +453,7 @@ describe('Solitude app flow', () => {
       currentCollectionId: 'collection-1',
       trackProfiles: {},
       collections: [{
-        id: 'collection-1', name: 'Original name', albums: [
+        id: 'collection-1', name: 'Original name', vibe: 'Rainy day', albums: [
           { id: 'a', title: 'A', artist: 'Artist A', sourceText: 'A - Artist A', matchStatus: 'manual' },
           { id: 'b', title: 'B', artist: 'Artist B', sourceText: 'B - Artist B', matchStatus: 'manual' },
         ],
@@ -454,6 +468,7 @@ describe('Solitude app flow', () => {
     render(<App />)
 
     expect(screen.getByText(/ranking history/i)).toBeInTheDocument()
+    expect(screen.queryByText(/^Rainy day$/i)).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /rename original name/i }))
     const rename = screen.getByLabelText(/collection name/i)
     await user.clear(rename)

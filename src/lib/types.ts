@@ -131,7 +131,6 @@ export interface BattleRun {
 export interface Collection {
   id: string
   name: string
-  vibe?: string
   note?: string
   albums: Album[]
   createdAt: string

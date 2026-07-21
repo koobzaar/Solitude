@@ -74,27 +74,13 @@ function collectionDuplicates(albums: readonly Album[]): Set<string> {
 
 interface LibraryProps {
   collections: Collection[]
-  onCreate: (name: string, vibe?: string, note?: string) => void
+  onCreate: (name: string, note?: string) => void
   onRename: (id: string, name: string) => void
   onDelete: (id: string) => void
   onImport: (id: string) => void
   onRank: (id: string) => void
   onResume: (id: string) => void
   onViewRun: (collectionId: string, runId: string) => void
-}
-
-const COLLECTION_VIBES = [
-  { value: 'Late-night', key: 'lateNight' },
-  { value: 'Sunday morning', key: 'sundayMorning' },
-  { value: 'Road trip', key: 'roadTrip' },
-  { value: 'Deep focus', key: 'deepFocus' },
-  { value: 'Rainy day', key: 'rainyDay' },
-  { value: 'Party', key: 'party' },
-] as const
-
-function displayVibe(t: TFunction, vibe: string): string {
-  const known = COLLECTION_VIBES.find((item) => item.value === vibe)
-  return known ? t(`vibes.${known.key}`) : vibe
 }
 
 const DEMO_RECORDS = [
@@ -133,7 +119,6 @@ function LibraryScreen({ collections, onCreate, onRename, onDelete, onImport, on
   const { t, i18n } = useTranslation()
   const [setupOpen, setSetupOpen] = useState(false)
   const [name, setName] = useState('')
-  const [vibe, setVibe] = useState<string>()
   const [note, setNote] = useState('')
   const [editingId, setEditingId] = useState<string>()
   const [editingName, setEditingName] = useState('')
@@ -146,7 +131,6 @@ function LibraryScreen({ collections, onCreate, onRename, onDelete, onImport, on
 
   const openSetup = () => {
     setName('')
-    setVibe(undefined)
     setNote('')
     setSetupOpen(true)
   }
@@ -155,7 +139,7 @@ function LibraryScreen({ collections, onCreate, onRename, onDelete, onImport, on
     event.preventDefault()
     const trimmed = name.trim()
     if (!trimmed) return
-    onCreate(trimmed, vibe, note.trim() || undefined)
+    onCreate(trimmed, note.trim() || undefined)
   }
 
   return (
@@ -178,22 +162,7 @@ function LibraryScreen({ collections, onCreate, onRename, onDelete, onImport, on
                 maxLength={80}
               />
 
-              <fieldset>
-                <legend>{t('library.moodLegend')} <span>— {t('common.optional')}</span></legend>
-                <div className="vibe-list">
-                  {COLLECTION_VIBES.map(({ value, key }) => (
-                    <button
-                      className={vibe === value ? 'vibe-chip vibe-chip--selected' : 'vibe-chip'}
-                      type="button"
-                      aria-pressed={vibe === value}
-                      key={value}
-                      onClick={() => setVibe((current) => current === value ? undefined : value)}
-                    >{t(`vibes.${key}`)}</button>
-                  ))}
-                </div>
-              </fieldset>
-
-              <label htmlFor="collection-note">{t('library.noteLabel')} <span>— {t('common.optional')}</span></label>
+              <label htmlFor="collection-note">{t('library.noteLabel')} <span>({t('common.optional')})</span></label>
               <textarea id="collection-note" value={note} onChange={(event) => setNote(event.target.value)} placeholder={t('library.notePlaceholder')} rows={2} maxLength={280} />
 
               <div className="collection-setup__actions">
@@ -274,7 +243,6 @@ function LibraryScreen({ collections, onCreate, onRename, onDelete, onImport, on
                               records: t('common.record', { count: collection.albums.length }),
                               date: new Date(collection.updatedAt).toLocaleDateString(appLocale(i18n.resolvedLanguage)),
                             })}</p>
-                            {collection.vibe && <span className="collection-vibe">{displayVibe(t, collection.vibe)}</span>}
                           </div>
                         </div>
 
@@ -1287,9 +1255,9 @@ export default function App() {
     setScreen(nextScreen)
   }
 
-  const createCollection = (name: string, vibe?: string, note?: string) => {
+  const createCollection = (name: string, note?: string) => {
     const timestamp = nowIso()
-    const collection: Collection = { id: makeId('collection'), name, vibe, note, albums: [], createdAt: timestamp, updatedAt: timestamp, completedRuns: [] }
+    const collection: Collection = { id: makeId('collection'), name, note, albums: [], createdAt: timestamp, updatedAt: timestamp, completedRuns: [] }
     setState((current) => ({ ...current, collections: [...current.collections, collection], currentCollectionId: collection.id }))
     setSelectedCollectionId(collection.id)
     setImportDraft('')
