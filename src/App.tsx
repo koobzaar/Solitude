@@ -883,6 +883,7 @@ interface TrackReviewProps {
 
 function TrackReviewScreen({ collection, run, client, profiles, currentAlbumId, onCurrentAlbum, onCommit, onExit }: TrackReviewProps) {
   const { t, i18n } = useTranslation()
+  const reduceMotion = useReducedMotion()
   const albums = run.albumSnapshot ?? collection.albums
   const initialIndex = Math.max(0, albums.findIndex((album) => album.id === currentAlbumId))
   const [index, setIndex] = useState(initialIndex)
@@ -894,6 +895,8 @@ function TrackReviewScreen({ collection, run, client, profiles, currentAlbumId, 
   const [loading, setLoading] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<'loadFailed' | 'moreFailed'>()
+  const reviewContentRef = useRef<HTMLDivElement>(null)
+  const pendingScrollAlbumIdRef = useRef<string | undefined>(undefined)
 
   useEffect(() => {
     if (!album) return
@@ -922,6 +925,12 @@ function TrackReviewScreen({ collection, run, client, profiles, currentAlbumId, 
     }).finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [album?.id, client])
+
+  useEffect(() => {
+    if (!album || pendingScrollAlbumIdRef.current !== album.id) return
+    pendingScrollAlbumIdRef.current = undefined
+    reviewContentRef.current?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' })
+  }, [album?.id, reduceMotion])
 
   if (!album) {
     return <div className="page constrained-page"><h1>{t('trackReview.noAlbums')}</h1><button className="button" type="button" onClick={onExit}>{t('trackReview.returnResults')}</button></div>
@@ -981,6 +990,7 @@ function TrackReviewScreen({ collection, run, client, profiles, currentAlbumId, 
     onCommit(album, nextProfile, complete)
     if (!complete) {
       const nextIndex = index + 1
+      pendingScrollAlbumIdRef.current = albums[nextIndex].id
       setIndex(nextIndex)
       onCurrentAlbum(albums[nextIndex].id)
     }
@@ -1017,7 +1027,7 @@ function TrackReviewScreen({ collection, run, client, profiles, currentAlbumId, 
           <AlbumArt src={album.coverUrl} title={album.title} artist={displayArtist(t, album.artist)} />
           <span>{String(index + 1).padStart(2, '0')}</span>
         </div>
-        <div className="track-review-content">
+        <div className="track-review-content" ref={reviewContentRef}>
           <div className="track-review-album">
             <div><h2 id="track-album-title">{album.title}</h2><p>{displayArtist(t, album.artist)}{album.year ? ` · ${formatNumber(album.year, i18n.resolvedLanguage, { useGrouping: false })}` : ''}</p></div>
             {!manualMode && editions.length > 0 && (
@@ -1055,7 +1065,31 @@ function TrackReviewScreen({ collection, run, client, profiles, currentAlbumId, 
                     <span>{track.mediumPosition > 1 ? `${track.mediumPosition}.` : ''}{String(track.position).padStart(2, '0')}</span>
                     <strong>{track.title}</strong>
                     <div>
-                      <button type="button" className={liked ? 'track-like track-like--active' : 'track-like'} aria-label={t(liked ? 'trackReview.unlike' : 'trackReview.like', { title: track.title })} aria-pressed={liked} title={t(liked ? 'trackReview.unlikeTitle' : 'trackReview.likeTitle')} onClick={() => toggleLike(track.id)}><span aria-hidden="true">{liked ? '♥' : '♡'}</span></button>
+                      <motion.button
+                        type="button"
+                        className={liked ? 'track-like track-like--active' : 'track-like'}
+                        aria-label={t(liked ? 'trackReview.unlike' : 'trackReview.like', { title: track.title })}
+                        aria-pressed={liked}
+                        title={t(liked ? 'trackReview.unlikeTitle' : 'trackReview.likeTitle')}
+                        onClick={() => toggleLike(track.id)}
+                        animate={liked ? {
+                          backgroundColor: ['rgba(119,41,51,0)', 'rgba(119,41,51,.16)', 'rgba(119,41,51,.08)'],
+                          boxShadow: ['0 0 0 rgba(119,41,51,0)', '0 0 20px rgba(119,41,51,.28)', '0 0 0 rgba(119,41,51,0)'],
+                        } : { backgroundColor: 'rgba(119,41,51,0)', boxShadow: '0 0 0 rgba(119,41,51,0)' }}
+                        transition={liked ? {
+                          backgroundColor: { duration: .42, times: [0, .35, 1] },
+                          boxShadow: { duration: .42, times: [0, .35, 1] },
+                        } : { duration: .16 }}
+                        whileTap={{ scale: .9 }}
+                      >
+                        <motion.span
+                          key={liked ? 'liked' : 'unliked'}
+                          aria-hidden="true"
+                          initial={{ scale: liked ? .45 : 1 }}
+                          animate={{ scale: 1 }}
+                          transition={liked ? { type: 'spring', stiffness: 500, damping: 15 } : { duration: .1 }}
+                        >{liked ? '♥' : '♡'}</motion.span>
+                      </motion.button>
                     </div>
                   </li>
                 )
@@ -1200,6 +1234,7 @@ export default function App() {
   const [swapColumns, setSwapColumns] = useState(restoredNavigation.navigation.swapColumns ?? false)
   const [selectedMode, setSelectedMode] = useState<RankingMode>(restoredNavigation.navigation.selectedMode ?? 'balanced')
   const [trackReviewAlbumId, setTrackReviewAlbumId] = useState<string | undefined>(restoredNavigation.navigation.trackReviewAlbumId)
+  const resetResultsScrollRef = useRef(false)
   const client = useMemo(() => new MusicBrainzClient(), [])
   const selectedCollection = state.collections.find((collection) => collection.id === selectedCollectionId)
 
@@ -1219,6 +1254,12 @@ export default function App() {
       trackReviewAlbumId,
     })
   }, [importDraft, resultRunId, screen, selectedCollection?.activeRun?.id, selectedCollectionId, selectedMode, swapColumns, trackReviewAlbumId])
+
+  useEffect(() => {
+    if (screen !== 'results' || !resetResultsScrollRef.current) return
+    resetResultsScrollRef.current = false
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
+  }, [screen])
 
   const goHome = () => {
     setScreen('library')
@@ -1363,7 +1404,10 @@ export default function App() {
         }),
       }
     })
-    if (complete) setScreen('results')
+    if (complete) {
+      resetResultsScrollRef.current = true
+      setScreen('results')
+    }
   }
 
   const updateResultWeight = (weight: number) => {

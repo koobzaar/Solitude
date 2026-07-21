@@ -54,6 +54,37 @@ function seedActiveBattle() {
   }))
 }
 
+interface TrackReviewSeedAlbum {
+  id: string
+  title: string
+  artist: string
+  sourceText: string
+  matchStatus: 'manual' | 'matched'
+  releaseGroupId?: string
+}
+
+function seedTrackReview(albums: TrackReviewSeedAlbum[], tracklists: Record<string, unknown> = {}) {
+  const timestamp = '2026-07-16T12:00:00.000Z'
+  localStorage.setItem(DATA_STORAGE_KEY, JSON.stringify({
+    version: 3,
+    learnedPaceSamples: [],
+    currentCollectionId: 'collection-1',
+    trackProfiles: {},
+    collections: [{
+      id: 'collection-1', name: 'Heart controls', albums, createdAt: timestamp, updatedAt: timestamp,
+      completedRuns: [{
+        id: 'run-1', mode: 'balanced', seed: 1, algorithmVersion: 'bt-v1', decisions: [], status: 'completed',
+        createdAt: timestamp, updatedAt: timestamp, completedAt: timestamp, paceSamples: [],
+        finalRanking: albums.map((album) => album.id), albumSnapshot: albums,
+      }],
+    }],
+  }))
+  localStorage.setItem(CATALOG_STORAGE_KEY, JSON.stringify({ version: 3, entries: {}, covers: {}, tracklists }))
+  sessionStorage.setItem(NAVIGATION_STORAGE_KEY, JSON.stringify({
+    version: 1, screen: 'track-review', collectionId: 'collection-1', runId: 'run-1', trackReviewAlbumId: albums[0]?.id,
+  }))
+}
+
 describe('Solitude app flow', () => {
   beforeEach(() => {
     motionPreference.reduced = false
@@ -164,11 +195,90 @@ describe('Solitude app flow', () => {
     })
   })
 
-  it('uses a single accessible heart toggle for catalog tracks', async () => {
-    const timestamp = '2026-07-16T12:00:00.000Z'
-    const albums = [
+  it('keeps one accessible heart toggle, preserves likes, and scrolls once per album advance', async () => {
+    const albums: TrackReviewSeedAlbum[] = [
       { id: 'a', title: 'A', artist: 'Artist A', sourceText: 'A - Artist A', matchStatus: 'matched', releaseGroupId: 'release-group-a' },
       { id: 'b', title: 'B', artist: 'Artist B', sourceText: 'B - Artist B', matchStatus: 'manual' },
+      { id: 'c', title: 'C', artist: 'Artist C', sourceText: 'C - Artist C', matchStatus: 'manual' },
+    ]
+    seedTrackReview(albums, {
+      'release-group-a:0': {
+        expiresAt: Date.now() + 60_000,
+        result: {
+          releaseGroupId: 'release-group-a', offset: 0, releaseCount: 1, hasMore: false,
+          editions: [{
+            id: 'edition-a', title: 'Standard edition', trackCount: 2,
+            tracks: [
+              { id: 'track-1', title: 'First Song', position: 1, mediumPosition: 1 },
+              { id: 'track-2', title: 'Second Song', position: 2, mediumPosition: 1 },
+            ],
+          }],
+        },
+      },
+    })
+
+    const user = userEvent.setup()
+    render(<App />)
+    const scrollIntoView = vi.mocked(Element.prototype.scrollIntoView)
+    const scrollTo = vi.mocked(window.scrollTo)
+    const like = await screen.findByRole('button', { name: /like first song/i })
+    expect(like).toHaveAttribute('aria-pressed', 'false')
+    expect(like).toHaveTextContent('♡')
+    expect(screen.queryByRole('button', { name: /^love/i })).not.toBeInTheDocument()
+    expect(scrollIntoView).not.toHaveBeenCalled()
+
+    await user.click(like)
+    const unlike = screen.getByRole('button', { name: /unlike first song/i })
+    expect(unlike).toHaveAttribute('aria-pressed', 'true')
+    expect(unlike).toHaveTextContent('♥')
+    expect(scrollIntoView).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('button', { name: /save & next album/i }))
+    expect(await screen.findByRole('heading', { name: /^B$/ })).toBeInTheDocument()
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(1))
+    expect(scrollIntoView).toHaveBeenLastCalledWith({ behavior: 'smooth', block: 'start' })
+    await waitFor(() => {
+      const stored = JSON.parse(localStorage.getItem(DATA_STORAGE_KEY) ?? '{}')
+      expect(stored.trackProfiles['mb:release-group-a'].likedTrackIds).toEqual(['track-1'])
+    })
+
+    await user.click(screen.getByRole('button', { name: /skip unheard album/i }))
+    expect(await screen.findByRole('heading', { name: /^C$/ })).toBeInTheDocument()
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(2))
+    expect(scrollTo).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('button', { name: /skip unheard album/i }))
+    expect(await screen.findByRole('heading', { name: /your next record is clear/i })).toBeInTheDocument()
+    await waitFor(() => expect(scrollTo).toHaveBeenCalledTimes(1))
+    expect(scrollTo).toHaveBeenCalledWith({ top: 0, left: 0, behavior: 'auto' })
+    expect(scrollIntoView).toHaveBeenCalledTimes(2)
+  })
+
+  it('uses immediate scrolling between review albums when reduced motion is preferred', async () => {
+    motionPreference.reduced = true
+    seedTrackReview([
+      { id: 'a', title: 'A', artist: 'Artist A', sourceText: 'A - Artist A', matchStatus: 'manual' },
+      { id: 'b', title: 'B', artist: 'Artist B', sourceText: 'B - Artist B', matchStatus: 'manual' },
+    ])
+    const user = userEvent.setup()
+    render(<App />)
+    const scrollIntoView = vi.mocked(Element.prototype.scrollIntoView)
+
+    expect(await screen.findByRole('heading', { name: /^A$/ })).toBeInTheDocument()
+    expect(scrollIntoView).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: /skip unheard album/i }))
+    expect(await screen.findByRole('heading', { name: /^B$/ })).toBeInTheDocument()
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(1))
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'auto', block: 'start' })
+  })
+
+  it('keeps long result titles, artists, and scores present in the ranking rows', async () => {
+    const timestamp = '2026-07-16T12:00:00.000Z'
+    const longTitle = 'A Remarkably Long Album Title That Must Wrap Without Leaving the Mobile Viewport'
+    const longArtist = 'The Extraordinary International Ensemble With an Equally Long Artist Name'
+    const albums = [
+      { id: 'a', title: longTitle, artist: longArtist, sourceText: 'long result', matchStatus: 'manual' },
+      { id: 'b', title: 'Another Extended Record Name for Narrow Screens', artist: 'A Second Very Long Artist Credit', sourceText: 'second result', matchStatus: 'manual' },
     ]
     localStorage.setItem(DATA_STORAGE_KEY, JSON.stringify({
       version: 3,
@@ -176,50 +286,25 @@ describe('Solitude app flow', () => {
       currentCollectionId: 'collection-1',
       trackProfiles: {},
       collections: [{
-        id: 'collection-1', name: 'Heart controls', albums, createdAt: timestamp, updatedAt: timestamp,
+        id: 'collection-1', name: 'Long results', albums, createdAt: timestamp, updatedAt: timestamp,
         completedRuns: [{
-          id: 'run-1', mode: 'balanced', seed: 1, algorithmVersion: 'bt-v1', decisions: [], status: 'completed',
-          createdAt: timestamp, updatedAt: timestamp, completedAt: timestamp, paceSamples: [], finalRanking: ['a', 'b'], albumSnapshot: albums,
+          id: 'run-1', mode: 'balanced', seed: 1, algorithmVersion: 'bt-v1',
+          decisions: [{ winnerId: 'a', loserId: 'b', outcome: 'win', durationMs: 1000, chosenAt: timestamp }],
+          status: 'completed', createdAt: timestamp, updatedAt: timestamp, completedAt: timestamp, paceSamples: [],
+          finalRanking: ['a', 'b'], heartScores: { a: 1234567890.12, b: -987654321.98 }, albumSnapshot: albums,
+          trackAnalysis: { createdAt: timestamp, profiles: {}, collectionMean: .5, recordScores: { a: .95, b: .05 } },
         }],
       }],
     }))
-    localStorage.setItem(CATALOG_STORAGE_KEY, JSON.stringify({
-      version: 3, entries: {}, covers: {}, tracklists: {
-        'release-group-a:0': {
-          expiresAt: Date.now() + 60_000,
-          result: {
-            releaseGroupId: 'release-group-a', offset: 0, releaseCount: 1, hasMore: false,
-            editions: [{
-              id: 'edition-a', title: 'Standard edition', trackCount: 2,
-              tracks: [
-                { id: 'track-1', title: 'First Song', position: 1, mediumPosition: 1 },
-                { id: 'track-2', title: 'Second Song', position: 2, mediumPosition: 1 },
-              ],
-            }],
-          },
-        },
-      },
-    }))
     sessionStorage.setItem(NAVIGATION_STORAGE_KEY, JSON.stringify({
-      version: 1, screen: 'track-review', collectionId: 'collection-1', runId: 'run-1', trackReviewAlbumId: 'a',
+      version: 1, screen: 'results', collectionId: 'collection-1', runId: 'run-1',
     }))
 
-    const user = userEvent.setup()
     render(<App />)
-    const like = await screen.findByRole('button', { name: /like first song/i })
-    expect(like).toHaveAttribute('aria-pressed', 'false')
-    expect(like).toHaveTextContent('♡')
-    expect(screen.queryByRole('button', { name: /^love/i })).not.toBeInTheDocument()
-
-    await user.click(like)
-    const unlike = screen.getByRole('button', { name: /unlike first song/i })
-    expect(unlike).toHaveAttribute('aria-pressed', 'true')
-    expect(unlike).toHaveTextContent('♥')
-    await user.click(screen.getByRole('button', { name: /save & next album/i }))
-    await waitFor(() => {
-      const stored = JSON.parse(localStorage.getItem(DATA_STORAGE_KEY) ?? '{}')
-      expect(stored.trackProfiles['mb:release-group-a'].likedTrackIds).toEqual(['track-1'])
-    })
+    expect(await screen.findByText(longTitle)).toBeInTheDocument()
+    expect(screen.getByText(longArtist)).toBeInTheDocument()
+    expect(screen.getByText('1,234,567,890.12 heart')).toBeInTheDocument()
+    expect(screen.getByText('-987,654,321.98 heart')).toBeInTheDocument()
   })
 
   it('renders safely for people who prefer reduced motion', () => {

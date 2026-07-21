@@ -33,6 +33,8 @@ beforeEach(() => {
       dispatchEvent: vi.fn(),
     })),
   })
+  Object.defineProperty(window, 'scrollTo', { configurable: true, writable: true, value: vi.fn() })
+  Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, writable: true, value: vi.fn() })
 })
 
 afterEach(() => cleanup())

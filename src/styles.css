@@ -465,11 +465,11 @@ kbd { padding: 2px 5px; border: 1px solid rgba(255,255,255,.2); border-radius: 2
 .results-hero h1 { margin-bottom: 16px; font-size: clamp(52px, 10vw, 92px); }
 .results-hero > p:last-child { max-width: 560px; margin-inline: auto; color: var(--muted); line-height: 1.6; }
 .ranking-list { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--ink); }
-.ranking-list li { min-height: 88px; padding: 9px 8px; display: grid; grid-template-columns: 38px 64px 1fr auto; align-items: center; gap: 12px; border-bottom: 1px solid var(--line); }
+.ranking-list li { min-width: 0; min-height: 88px; padding: 9px 8px; display: grid; grid-template-columns: 38px 64px minmax(0,1fr) auto; align-items: center; gap: 12px; border-bottom: 1px solid var(--line); }
 .ranking-list li:first-child { min-height: 116px; background: rgba(165,132,79,.09); }
 .ranking-list .album-art { width: 64px; }
 .ranking-list li:first-child .album-art { width: 90px; }
-.ranking-list li:first-child { grid-template-columns: 38px 90px 1fr auto; }
+.ranking-list li:first-child { grid-template-columns: 38px 90px minmax(0,1fr) auto; }
 .rank-number { color: var(--muted); font: 12px ui-monospace, monospace; }
 .ranking-list li > span:nth-of-type(2) { min-width: 0; display: flex; flex-direction: column; }
 .ranking-list strong { overflow: hidden; font: 600 23px 'Cormorant Garamond'; text-overflow: ellipsis; white-space: nowrap; }
@@ -514,14 +514,13 @@ kbd { padding: 2px 5px; border: 1px solid rgba(255,255,255,.2); border-radius: 2
 .track-review-album p { margin: 0; color: var(--muted); font-size: 12px; }
 .edition-select { min-width: min(100%, 260px); display: grid; gap: 5px; color: var(--muted); font-size: 9px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; }
 .edition-select select { width: 100%; min-height: 44px; padding: 8px 30px 8px 9px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); font-size: 11px; text-transform: none; letter-spacing: 0; }
-.tracklist { max-height: 590px; margin: 0; padding: 0; overflow: auto; list-style: none; border-top: 1px solid var(--line); }
+.tracklist { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
 .tracklist li { min-height: 58px; padding: 7px 0; display: grid; grid-template-columns: 34px minmax(0,1fr) auto; align-items: center; gap: 10px; border-bottom: 1px solid var(--line); }
 .tracklist li > span { color: var(--muted); font: 10px ui-monospace, monospace; }
 .tracklist li > strong { font: 600 19px/1.1 'Cormorant Garamond'; }
 .tracklist li > div { display: flex; gap: 4px; }
-.track-like { width: 44px; min-width: 44px; min-height: 44px; padding: 5px; display: grid; place-items: center; border: 0; border-radius: 50%; background: transparent; color: var(--muted); font-size: 26px; line-height: 1; cursor: pointer; transition: color .16s ease, transform .16s ease, background .16s ease; }
-.track-like:hover { color: var(--oxblood); background: rgba(119,41,51,.06); transform: scale(1.1); }
-.track-like:active { transform: scale(.94); }
+.track-like { width: 56px; min-width: 56px; min-height: 56px; padding: 5px; display: grid; place-items: center; border: 0; border-radius: 50%; background: transparent; color: var(--muted); font-size: 30px; line-height: 1; cursor: pointer; transition: color .16s ease; }
+.track-like:hover { color: var(--oxblood); }
 .track-like--active { color: var(--oxblood); }
 .tracklist-skeleton { display: grid; gap: 8px; }
 .tracklist-skeleton i { height: 48px; display: block; background: linear-gradient(100deg, rgba(111,103,94,.07), rgba(255,255,255,.42), rgba(111,103,94,.07)); background-size: 200% 100%; animation: artwork-shimmer 1.35s ease-in-out infinite; }
@@ -616,15 +615,18 @@ kbd { padding: 2px 5px; border: 1px solid rgba(255,255,255,.2); border-radius: 2
   .choice-card { padding-bottom: 12px; }
   .versus { width: 32px; height: 32px; font-size: 12px; }
   .keyboard-hint { display: none; }
-  .ranking-list li, .ranking-list li:first-child { grid-template-columns: 28px 54px minmax(0,1fr); }
-  .ranking-list .album-art, .ranking-list li:first-child .album-art { width: 54px; }
+  .ranking-list li, .ranking-list li:first-child { min-width: 0; grid-template-columns: 28px 54px minmax(0,1fr); grid-template-rows: auto auto; column-gap: 10px; }
+  .ranking-list .rank-number { grid-column: 1; grid-row: 1 / span 2; }
+  .ranking-list .album-art, .ranking-list li:first-child .album-art { width: 54px; grid-column: 2; grid-row: 1 / span 2; }
+  .ranking-list li > span:nth-of-type(2) { min-width: 0; grid-column: 3; grid-row: 1; }
+  .ranking-list strong, .ranking-list small { overflow-wrap: anywhere; white-space: normal; }
   .top-pick { display: none; }
-  .ranking-score { grid-column: 3; justify-self: end; align-self: end; font-size: 8px !important; }
+  .ranking-score { max-width: 100%; grid-column: 3; grid-row: 2; justify-self: start; align-self: start; font-size: 8px !important; text-align: left; }
   .track-review-heading { padding-top: 28px; }
   .track-review-content { padding: 15px; }
   .track-review-album { align-items: stretch; flex-direction: column; }
-  .tracklist li { grid-template-columns: 25px minmax(0,1fr); }
-  .tracklist li > div { grid-column: 2; }
+  .tracklist li { grid-template-columns: 25px minmax(0,1fr) 56px; }
+  .tracklist li > div { grid-column: 3; }
   .manual-track-summary > div { grid-template-columns: 1fr; }
   .track-review-actions .button { width: 100%; }
   .unreviewed-results ul { columns: 1; }
