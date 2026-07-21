@@ -40,6 +40,7 @@ export type RankingMode = 'quick' | 'balanced' | 'thorough'
 export interface BattleDecision {
   winnerId: string
   loserId: string
+  outcome?: 'win' | 'tie'
   chosenAt: string
   durationMs: number
 }

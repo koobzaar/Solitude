@@ -1,6 +1,14 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+const motionPreference = vi.hoisted(() => ({ reduced: false }))
+
+vi.mock('motion/react', async (importOriginal) => ({
+  ...await importOriginal<typeof import('motion/react')>(),
+  useReducedMotion: () => motionPreference.reduced,
+}))
+
 import App from './App'
 import { NAVIGATION_STORAGE_KEY } from './lib/navigation'
 import { CATALOG_STORAGE_KEY, DATA_STORAGE_KEY } from './lib/storage'
@@ -22,7 +30,35 @@ async function reachBattle(albumLines: string) {
   return user
 }
 
+function seedActiveBattle() {
+  const timestamp = '2026-07-21T12:00:00.000Z'
+  const albums = [
+    { id: 'a', title: 'Album A', artist: 'Artist A', sourceText: 'Album A - Artist A', matchStatus: 'manual' },
+    { id: 'b', title: 'Album B', artist: 'Artist B', sourceText: 'Album B - Artist B', matchStatus: 'manual' },
+  ]
+  localStorage.setItem(DATA_STORAGE_KEY, JSON.stringify({
+    version: 3,
+    learnedPaceSamples: [],
+    currentCollectionId: 'collection-1',
+    trackProfiles: {},
+    collections: [{
+      id: 'collection-1', name: 'Tie shelf', albums, createdAt: timestamp, updatedAt: timestamp, completedRuns: [],
+      activeRun: {
+        id: 'run-1', mode: 'balanced', seed: 7, algorithmVersion: 'bt-v1', decisions: [], status: 'active',
+        createdAt: timestamp, updatedAt: timestamp, paceSamples: [],
+      },
+    }],
+  }))
+  sessionStorage.setItem(NAVIGATION_STORAGE_KEY, JSON.stringify({
+    version: 1, screen: 'battle', collectionId: 'collection-1', runId: 'run-1',
+  }))
+}
+
 describe('Solitude app flow', () => {
+  beforeEach(() => {
+    motionPreference.reduced = false
+  })
+
   it('moves from import through review and accepts keyboard album choices', async () => {
     await reachBattle('Blue Train - John Coltrane\nKind of Blue - Miles Davis')
     expect(screen.getByRole('heading', { name: /which record comes first/i })).toBeInTheDocument()
@@ -33,12 +69,18 @@ describe('Solitude app flow', () => {
     const stored = JSON.parse(localStorage.getItem(DATA_STORAGE_KEY) ?? '{}')
     expect(stored.collections[0].completedRuns).toHaveLength(1)
     expect(stored.collections[0].activeRun).toBeUndefined()
+    expect(stored.collections[0].completedRuns[0].decisions[0].outcome).toBe('win')
   })
 
   it('locks utilities during animation, then Undo restores an immediately usable matchup', async () => {
     const user = await reachBattle('A - Artist A\nB - Artist B\nC - Artist C')
     const originalMatchup = document.querySelector('.battle-page .sr-only')?.textContent
-    await user.click(document.querySelectorAll<HTMLButtonElement>('.choice-card')[0])
+    const tieButton = screen.getByRole('button', { name: /can’t decide/i })
+    expect(tieButton).toHaveAttribute('aria-keyshortcuts', '0')
+    await user.click(tieButton)
+    expect(document.querySelectorAll<HTMLButtonElement>('.choice-card')).toHaveLength(2)
+    expect(Array.from(document.querySelectorAll<HTMLButtonElement>('.choice-card')).every((button) => button.disabled)).toBe(true)
+    expect(tieButton).toBeDisabled()
     expect(screen.getByRole('button', { name: /undo/i })).toBeDisabled()
     expect(screen.getByRole('button', { name: /restart/i })).toBeDisabled()
     expect(screen.getByRole('button', { name: /save & exit/i })).toBeDisabled()
@@ -49,6 +91,36 @@ describe('Solitude app flow', () => {
     expect(document.querySelector('.battle-page .sr-only')?.textContent).toBe(originalMatchup)
     fireEvent.keyDown(window, { key: 'ArrowRight' })
     await waitFor(() => expect(document.querySelector('.battle-progress__labels span')?.textContent).toContain('Battle 2'))
+  })
+
+  it('stores a clicked tie and completes two albums with equal Heart scores', async () => {
+    seedActiveBattle()
+    const user = userEvent.setup()
+    render(<App />)
+
+    const tieButton = await screen.findByRole('button', { name: /can’t decide/i })
+    await user.click(tieButton)
+    expect(await screen.findByRole('heading', { name: /your next record is clear/i })).toBeInTheDocument()
+
+    const stored = JSON.parse(localStorage.getItem(DATA_STORAGE_KEY) ?? '{}')
+    const completedRun = stored.collections[0].completedRuns[0]
+    expect(completedRun.decisions[0]).toMatchObject({ outcome: 'tie' })
+    expect(new Set([completedRun.decisions[0].winnerId, completedRun.decisions[0].loserId])).toEqual(new Set(['a', 'b']))
+    expect(completedRun.heartScores.a).toBeCloseTo(0, 12)
+    expect(completedRun.heartScores.b).toBeCloseTo(0, 12)
+  })
+
+  it('uses 0 to commit a tie immediately when reduced motion is preferred', async () => {
+    motionPreference.reduced = true
+    seedActiveBattle()
+    render(<App />)
+    await screen.findByRole('button', { name: /can’t decide/i })
+
+    fireEvent.keyDown(window, { key: '0' })
+    const immediatelyStored = JSON.parse(localStorage.getItem(DATA_STORAGE_KEY) ?? '{}')
+    expect(immediatelyStored.collections[0].completedRuns[0].decisions[0].outcome).toBe('tie')
+    expect(await screen.findByRole('heading', { name: /your next record is clear/i })).toBeInTheDocument()
+    expect(immediatelyStored.collections[0].completedRuns[0].heartScores.a).toBeCloseTo(immediatelyStored.collections[0].completedRuns[0].heartScores.b, 12)
   })
 
   it('restores the exact active battle after a same-tab reload and still supports Save & exit', async () => {

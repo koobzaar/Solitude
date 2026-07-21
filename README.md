@@ -59,7 +59,7 @@ flowchart LR
     A[Import album list] --> B[Match against MusicBrainz]
     B --> C[Review & fix matches]
     C --> D[Pick a ranking mode]
-    D --> E[Battle: A or B?]
+    D --> E[Battle: A, B, or tie?]
     E --> E
     E --> F[Heart ranking]
     F --> G{Review songs?}
@@ -70,7 +70,7 @@ flowchart LR
 
 1. **Import** — paste a plain-text list. Supported formats: `Album - Artist` (any dash variant), tab-separated columns, `Album by Artist`, or title-only lines. A global toggle swaps the Artist/Album column interpretation if your list is reversed.
 2. **Review** — each album is matched against MusicBrainz release groups using punctuation- and typo-tolerant searches. Strong matches collapse into compact confirmed rows; only ambiguous candidates stay open for review. Artwork shows a skeleton while loading and an artist-inspired fallback when no cover exists. You can edit titles, rematch, remove albums, or paste a custom HTTPS cover URL.
-3. **Battle** — choose a depth and start deciding. Every matchup forces a choice (no ties, no skips), with reliable Undo, live progress, and a remaining-time estimate that learns from your actual pace. Quick and Thorough use seeded schedules; Balanced adapts its next matchup to the evidence so far.
+3. **Battle** — choose a depth and start deciding. Pick either record or mark an honest tie; there are no skips. Undo, live progress, and a remaining-time estimate that learns from your actual pace remain available. Quick and Thorough use seeded schedules; Balanced adapts its next matchup to the evidence so far.
 4. **Rank** — get the Bradley–Terry **Heart** order, revisit it anytime from the collection's history, or restart with a different mode.
 5. **Review songs (optional)** — take one album at a time and select the heart beside each song you like. Songs are not compared or ranked against one another. You may skip unheard albums, use a likely standard MusicBrainz edition, choose another edition, or enter validated totals when no tracklist is available.
 6. **Blend** — once at least one album has song evidence, switch between **Heart**, shrunk **Record value**, and **Your balance**. The live blend starts at 75% heart and 25% songs.
@@ -104,9 +104,9 @@ The remaining-time estimate starts at four seconds per choice, then learns from 
 
 ### Heart: Bradley–Terry
 
-Solitude treats each album as having a hidden heart score `θ`. The chance that album `i` beats album `j` is the logistic probability `σ(θᵢ − θⱼ)`. It fits all choices together, rather than assuming your preferences must form a perfectly transitive sort. That means a sincere cycle—A over B, B over C, C over A—is valid evidence, not corrupt data.
+Solitude treats each album as having a hidden heart score `θ`. The chance that album `i` beats album `j` is the logistic probability `σ(θᵢ − θⱼ)`. It fits all choices together, rather than assuming your preferences must form a perfectly transitive sort. Wins contribute outcomes of `1` and `0`; ties contribute fractional outcomes of `0.5` to both albums. That means both an honest tie and a sincere cycle—A over B, B over C, C over A—are valid evidence, not corrupt data.
 
-The fit uses L2 regularization with `λ = 1`. In plain language, limited evidence is gently pulled toward neutral instead of producing extreme claims from one win. Scores are centered at zero and fitted with deterministic coordinate-Newton iterations. Seeded order breaks genuine numerical ties.
+The fit uses L2 regularization with `λ = 1`. In plain language, limited evidence is gently pulled toward neutral instead of producing extreme claims from one win. Scores are centered at zero and fitted with deterministic coordinate-Newton iterations. This remains the standard Bradley–Terry model (`bt-v1`), with ties represented as fractional evidence rather than a separate tie parameter. Seeded order breaks genuine numerical ties.
 
 Balanced estimates each unseen matchup's uncertainty with `p(1 − p)` and divides it by the square root of both albums' exposure. Close-to-50/50 pairs are informative; albums already heard many times receive less priority. This is adaptive uncertainty sampling, not a claim that the app knows what you should like.
 
@@ -170,7 +170,7 @@ npm run dev
 - **Refresh restoration**: guarded tab-only navigation is stored in `sessionStorage` under `solitude:navigation:v1`. Corrupt or stale collection/run references return safely to the library with a notice.
 - **Schema changes**: pre-launch data from earlier storage schemas is intentionally discarded instead of migrated.
 - **Artwork cache**: remote Cover Art Archive and custom HTTPS image bytes use browser `CacheStorage`, never `localStorage`. An image-only service worker keeps them for seven days, limits the cache to 250 least-recently-used entries, refreshes expired art, and falls back to stale art if refresh fails. Unsupported or storage-restricted browsers continue with normal `<img>` requests.
-- **Privacy**: no data ever leaves your browser except the metadata queries sent to MusicBrainz and cover requests to the Cover Art Archive.
+- **Privacy**: the app remains browser-only—there is no backend. No data ever leaves your browser except the metadata queries sent to MusicBrainz and cover requests to the Cover Art Archive.
 - **Portability**: collections do not sync across devices and cannot be exported yet. Clearing site data erases everything.
 - **Resilience**: malformed stored state is ignored safely, and storage-quota failures are surfaced in the interface instead of failing silently.
 

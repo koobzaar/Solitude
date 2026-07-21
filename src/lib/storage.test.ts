@@ -41,6 +41,27 @@ describe('storage', () => {
     expect(loaded.state.collections[0].completedRuns[0].finalRanking).toEqual(['a', 'b'])
   })
 
+  it('round-trips tie decisions without changing the storage or algorithm version', () => {
+    const storedCollection = collection()
+    storedCollection.activeRun!.decisions = [{
+      winnerId: 'a',
+      loserId: 'b',
+      outcome: 'tie',
+      chosenAt: '2026-01-01T00:00:05.000Z',
+      durationMs: 5_000,
+    }]
+    const state = { ...createInitialState(), collections: [storedCollection] }
+    const storage = new Map<string, string>()
+    expect(saveState(state, { setItem: (key, value) => { storage.set(key, value) } }).ok).toBe(true)
+
+    const loaded = loadState({ getItem: (key) => storage.get(key) ?? null })
+    expect(loaded.state.version).toBe(3)
+    expect(loaded.state.collections[0].activeRun?.algorithmVersion).toBe('bt-v1')
+    expect(loaded.state.collections[0].activeRun?.decisions[0]).toMatchObject({
+      winnerId: 'a', loserId: 'b', outcome: 'tie',
+    })
+  })
+
   it('discards state from previous schema versions', () => {
     const previous = { ...createInitialState(), version: 2, collections: [collection()] }
     const loaded = loadState({ getItem: () => JSON.stringify(previous) })

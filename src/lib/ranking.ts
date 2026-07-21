@@ -156,13 +156,14 @@ export function fitBradleyTerry(
   lambda = 1,
 ): Record<string, number> {
   const indexById = new Map(albumIds.map((id, index) => [id, index]))
-  const observations = albumIds.map(() => [] as Array<{ opponent: number; result: 0 | 1 }>)
+  const observations = albumIds.map(() => [] as Array<{ opponent: number; result: 0 | 0.5 | 1 }>)
   for (const decision of decisions) {
     const winner = indexById.get(decision.winnerId)
     const loser = indexById.get(decision.loserId)
     if (winner === undefined || loser === undefined || winner === loser) continue
-    observations[winner].push({ opponent: loser, result: 1 })
-    observations[loser].push({ opponent: winner, result: 0 })
+    const tied = decision.outcome === 'tie'
+    observations[winner].push({ opponent: loser, result: tied ? 0.5 : 1 })
+    observations[loser].push({ opponent: winner, result: tied ? 0.5 : 0 })
   }
 
   const scores = albumIds.map(() => 0)

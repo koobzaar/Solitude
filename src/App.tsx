@@ -11,7 +11,7 @@ import type { Screen } from './lib/navigation'
 import { appendPaceSample, estimateRemainingMs, formatDuration } from './lib/pace'
 import { MODE_DETAILS, battleCount, getBattleState } from './lib/ranking'
 import { albumProfileKey, blendedScores, buildTrackAnalysisSnapshot, DEFAULT_HEART_WEIGHT, findDisagreements, validateManualSummary } from './lib/trackAnalysis'
-import type { Album, AlbumTrackProfile, BattleRun, CatalogCandidate, Collection, ManualTrackSummary, RankingMode, TrackCatalogEntry, TrackEdition } from './lib/types'
+import type { Album, AlbumTrackProfile, BattleDecision, BattleRun, CatalogCandidate, Collection, ManualTrackSummary, RankingMode, TrackCatalogEntry, TrackEdition } from './lib/types'
 import { BATTLE_ALGORITHM_VERSION } from './lib/types'
 import { usePersistentState } from './lib/usePersistentState'
 
@@ -186,7 +186,7 @@ function LibraryScreen({ collections, onCreate, onRename, onDelete, onImport, on
                   <span className="ritual-preview__or" aria-hidden="true">or</span>
                   <RitualRecord album={ritualAlbums[1]} demo={demoRecords[1]} delay={-2.3} />
                 </div>
-                <p>Every ranking is built from moments like this—pick the one you’d rather own next. No ties, no maybes.</p>
+                <p>Every ranking is built from moments like this—pick the one you’d rather own next, or call it even.</p>
               </motion.aside>
             </section>
 
@@ -610,7 +610,7 @@ function ModeScreen({ collection, paceSamples, selected, onSelected, onBack, onS
       <div className="page-title page-title--center">
         <p className="eyebrow">03 · Set the listening depth</p>
         <h1>How certain do you<br />want to <em>feel?</em></h1>
-        <p>You can pick a new mode before every run. Every battle requires an A-or-B choice.</p>
+        <p>You can pick a new mode before every run. Choose either record, or call it a tie when neither comes first.</p>
       </div>
       {collection.albums.length > 40 && <div className="long-list-warning"><strong>A substantial listening pile.</strong> Thorough mode needs {battleCount('thorough', collection.albums.length).toLocaleString()} choices; consider Quick or Balanced.</div>}
       <div className="mode-grid" role="radiogroup" aria-label="Ranking mode">
@@ -652,7 +652,7 @@ interface BattleProps {
   collection: Collection
   run: BattleRun
   paceSamples: number[]
-  onChoose: (winnerId: string, loserId: string, durationMs: number, pageVisible: boolean) => void
+  onChoose: (winnerId: string, loserId: string, outcome: NonNullable<BattleDecision['outcome']>, durationMs: number, pageVisible: boolean) => void
   onUndo: () => void
   onRestart: () => void
   onExit: () => void
@@ -664,7 +664,7 @@ function BattleScreen({ collection, run, paceSamples, onChoose, onUndo, onRestar
   const startedAt = useRef(Date.now())
   const selectionTimer = useRef<number | undefined>(undefined)
   const pendingSelection = useRef(false)
-  const [selection, setSelection] = useState<{ winnerId: string; decisionIndex: number }>()
+  const [selection, setSelection] = useState<{ outcome: NonNullable<BattleDecision['outcome']>; winnerId?: string; decisionIndex: number }>()
   const albumMap = useMemo(() => new Map(collection.albums.map((album) => [album.id, album])), [collection.albums])
   const left = battle.matchup ? albumMap.get(battle.matchup.leftId) : undefined
   const right = battle.matchup ? albumMap.get(battle.matchup.rightId) : undefined
@@ -687,15 +687,15 @@ function BattleScreen({ collection, run, paceSamples, onChoose, onUndo, onRestar
 
   const activeSelection = selection?.decisionIndex === run.decisions.length ? selection : undefined
 
-  const choose = useCallback((winner: Album, loser: Album) => {
+  const choose = useCallback((first: Album, second: Album, outcome: NonNullable<BattleDecision['outcome']>) => {
     if (pendingSelection.current) return
     pendingSelection.current = true
     const durationMs = Date.now() - startedAt.current
     const pageVisible = document.visibilityState === 'visible'
-    setSelection({ winnerId: winner.id, decisionIndex: run.decisions.length })
+    setSelection({ outcome, winnerId: outcome === 'win' ? first.id : undefined, decisionIndex: run.decisions.length })
     const commit = () => {
       selectionTimer.current = undefined
-      onChoose(winner.id, loser.id, durationMs, pageVisible)
+      onChoose(first.id, second.id, outcome, durationMs, pageVisible)
     }
     if (reduceMotion) commit()
     else selectionTimer.current = window.setTimeout(commit, 260)
@@ -707,11 +707,15 @@ function BattleScreen({ collection, run, paceSamples, onChoose, onUndo, onRestar
       if (event.target instanceof Element && event.target.matches('input, textarea, select')) return
       if ((event.key === 'ArrowLeft' || event.key === '1') && left && right) {
         event.preventDefault()
-        choose(left, right)
+        choose(left, right, 'win')
       }
       if ((event.key === 'ArrowRight' || event.key === '2') && left && right) {
         event.preventDefault()
-        choose(right, left)
+        choose(right, left, 'win')
+      }
+      if (event.key === '0' && left && right) {
+        event.preventDefault()
+        choose(left, right, 'tie')
       }
     }
     window.addEventListener('keydown', keyHandler)
@@ -739,7 +743,7 @@ function BattleScreen({ collection, run, paceSamples, onChoose, onUndo, onRestar
       <div className="battle-prompt">
         <p className="eyebrow">Trust your instinct</p>
         <h1>Which record comes <em>first?</em></h1>
-        <p>Choose the album you’d rather own next. There are no ties.</p>
+        <p>Choose the album you’d rather own next, or call it even when neither comes first.</p>
       </div>
 
       <AnimatePresence mode="wait" initial={false}>
@@ -756,8 +760,8 @@ function BattleScreen({ collection, run, paceSamples, onChoose, onUndo, onRestar
             type="button"
             aria-keyshortcuts="ArrowLeft 1"
             disabled={Boolean(activeSelection)}
-            onClick={() => choose(left, right)}
-            animate={activeSelection ? activeSelection.winnerId === left.id ? { x: 20, y: -12, scale: 1.045, rotate: -1.1, opacity: 1 } : { x: -70, scale: .92, rotate: -2, opacity: .14 } : { x: 0, y: 0, scale: 1, rotate: 0, opacity: 1 }}
+            onClick={() => choose(left, right, 'win')}
+            animate={activeSelection ? activeSelection.outcome === 'tie' ? { x: 12, y: -5, scale: .985, rotate: 0, opacity: .72 } : activeSelection.winnerId === left.id ? { x: 20, y: -12, scale: 1.045, rotate: -1.1, opacity: 1 } : { x: -70, scale: .92, rotate: -2, opacity: .14 } : { x: 0, y: 0, scale: 1, rotate: 0, opacity: 1 }}
             transition={{ type: 'spring', stiffness: 260, damping: 24 }}
             whileHover={{ y: -10, rotate: -.6, scale: 1.015 }}
             whileTap={{ scale: 0.985 }}
@@ -766,14 +770,14 @@ function BattleScreen({ collection, run, paceSamples, onChoose, onUndo, onRestar
             <AlbumArt src={left.coverUrl} title={left.title} artist={left.artist} />
             <span className="choice-copy"><strong>{left.title}</strong><small>{left.artist}{left.year ? ` · ${left.year}` : ''}</small><i>Choose this record</i></span>
           </motion.button>
-          <motion.span className="versus" aria-hidden="true" animate={activeSelection ? { scale: 0, rotate: 180, opacity: 0 } : { scale: 1, rotate: 0, opacity: 1 }}>or</motion.span>
+          <motion.span className="versus" aria-hidden="true" animate={activeSelection?.outcome === 'win' ? { scale: 0, rotate: 180, opacity: 0 } : activeSelection?.outcome === 'tie' ? { scale: 1.12, rotate: 0, opacity: 1 } : { scale: 1, rotate: 0, opacity: 1 }}>or</motion.span>
           <motion.button
             className="choice-card"
             type="button"
             aria-keyshortcuts="ArrowRight 2"
             disabled={Boolean(activeSelection)}
-            onClick={() => choose(right, left)}
-            animate={activeSelection ? activeSelection.winnerId === right.id ? { x: -20, y: -12, scale: 1.045, rotate: 1.1, opacity: 1 } : { x: 70, scale: .92, rotate: 2, opacity: .14 } : { x: 0, y: 0, scale: 1, rotate: 0, opacity: 1 }}
+            onClick={() => choose(right, left, 'win')}
+            animate={activeSelection ? activeSelection.outcome === 'tie' ? { x: -12, y: -5, scale: .985, rotate: 0, opacity: .72 } : activeSelection.winnerId === right.id ? { x: -20, y: -12, scale: 1.045, rotate: 1.1, opacity: 1 } : { x: 70, scale: .92, rotate: 2, opacity: .14 } : { x: 0, y: 0, scale: 1, rotate: 0, opacity: 1 }}
             transition={{ type: 'spring', stiffness: 260, damping: 24 }}
             whileHover={{ y: -10, rotate: .6, scale: 1.015 }}
             whileTap={{ scale: 0.985 }}
@@ -784,7 +788,20 @@ function BattleScreen({ collection, run, paceSamples, onChoose, onUndo, onRestar
           </motion.button>
         </motion.div>
       </AnimatePresence>
-      <p className="keyboard-hint">Keyboard: <kbd>←</kbd> / <kbd>1</kbd> for left · <kbd>→</kbd> / <kbd>2</kbd> for right</p>
+      <motion.button
+        className="tie-button"
+        type="button"
+        aria-keyshortcuts="0"
+        disabled={Boolean(activeSelection)}
+        onClick={() => choose(left, right, 'tie')}
+        animate={activeSelection?.outcome === 'tie' ? { scale: 1.04, opacity: 1 } : { scale: 1, opacity: activeSelection ? .35 : 1 }}
+        whileHover={{ y: -2 }}
+        whileTap={{ scale: .98 }}
+      >
+        <kbd>0</kbd>
+        <span>Can’t decide</span>
+      </motion.button>
+      <p className="keyboard-hint">Keyboard: <kbd>←</kbd> / <kbd>1</kbd> for left · <kbd>0</kbd> for a tie · <kbd>→</kbd> / <kbd>2</kbd> for right</p>
     </div>
   )
 }
@@ -1175,11 +1192,11 @@ export default function App() {
     setScreen('battle')
   }
 
-  const chooseAlbum = (winnerId: string, loserId: string, durationMs: number, pageVisible: boolean) => {
+  const chooseAlbum = (winnerId: string, loserId: string, outcome: NonNullable<BattleDecision['outcome']>, durationMs: number, pageVisible: boolean) => {
     if (!selectedCollection?.activeRun) return
     const currentRun = selectedCollection.activeRun
     const timestamp = nowIso()
-    const decision = { winnerId, loserId, durationMs, chosenAt: timestamp }
+    const decision: BattleDecision = { winnerId, loserId, outcome, durationMs, chosenAt: timestamp }
     const decisions = [...currentRun.decisions, decision]
     const paceSamples = appendPaceSample(currentRun.paceSamples, durationMs, pageVisible)
     const nextBattle = getBattleState(currentRun.mode, selectedCollection.albums.map((album) => album.id), currentRun.seed, decisions)
