@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 interface AlbumArtProps {
   src?: string
@@ -14,6 +15,7 @@ function artistInitials(artist: string): string {
 }
 
 export function AlbumArt({ src, title, artist, className = '', fallback = 'record' }: AlbumArtProps) {
+  const { t } = useTranslation()
   const [failed, setFailed] = useState(false)
   const [loaded, setLoaded] = useState(false)
 
@@ -24,7 +26,7 @@ export function AlbumArt({ src, title, artist, className = '', fallback = 'recor
 
   if (!src || failed) {
     return (
-      <div className={`album-art album-art--placeholder album-art--${fallback} ${className}`} role="img" aria-label={`No cover for ${title} by ${artist}`}>
+      <div className={`album-art album-art--placeholder album-art--${fallback} ${className}`} role="img" aria-label={t('albumArt.missing', { title, artist })}>
         {fallback === 'artist' ? (
           <><span className="artist-portrait" aria-hidden="true" /><span className="artist-initials" aria-hidden="true">{artistInitials(artist)}</span></>
         ) : (
@@ -38,7 +40,7 @@ export function AlbumArt({ src, title, artist, className = '', fallback = 'recor
     <div
       className={`album-art album-art--remote ${loaded ? 'album-art--loaded' : 'album-art--loading'} ${className}`}
       role="img"
-      aria-label={`${title} — ${artist} cover`}
+      aria-label={t('albumArt.cover', { title, artist })}
       aria-busy={!loaded}
     >
       {!loaded && <span className="artwork-skeleton" aria-hidden="true"><i /><i /><i /></span>}

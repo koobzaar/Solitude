@@ -18,8 +18,8 @@ function manual(album: Album, trackCount: number, likedCount: number): AlbumTrac
 describe('track analysis', () => {
   it('validates manual like counts', () => {
     expect(validateManualSummary({ trackCount: 10, likedCount: 4 })).toBeUndefined()
-    expect(validateManualSummary({ trackCount: 5, likedCount: 6 })).toMatch(/cannot exceed/i)
-    expect(validateManualSummary({ trackCount: 4.5, likedCount: 1 })).toMatch(/whole numbers/i)
+    expect(validateManualSummary({ trackCount: 5, likedCount: 6 })).toBe('likedExceedsTotal')
+    expect(validateManualSummary({ trackCount: 4.5, likedCount: 1 })).toBe('wholeNumbers')
   })
 
   it('counts each Like as one success and applies eight-track shrinkage', () => {

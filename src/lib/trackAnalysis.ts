@@ -15,11 +15,13 @@ export function albumProfileKey(album: Pick<Album, 'releaseGroupId' | 'title' | 
     : `manual:${normalizeValue(album.title)}::${normalizeValue(album.artist)}`
 }
 
-export function validateManualSummary(summary: ManualTrackSummary): string | undefined {
+export type ManualSummaryErrorCode = 'wholeNumbers' | 'oneTrack' | 'likedExceedsTotal'
+
+export function validateManualSummary(summary: ManualTrackSummary): ManualSummaryErrorCode | undefined {
   const values = [summary.trackCount, summary.likedCount]
-  if (values.some((value) => !Number.isInteger(value) || value < 0)) return 'Use whole numbers of zero or more.'
-  if (summary.trackCount < 1) return 'Enter at least one track.'
-  if (summary.likedCount > summary.trackCount) return 'Liked tracks cannot exceed the track total.'
+  if (values.some((value) => !Number.isInteger(value) || value < 0)) return 'wholeNumbers'
+  if (summary.trackCount < 1) return 'oneTrack'
+  if (summary.likedCount > summary.trackCount) return 'likedExceedsTotal'
   return undefined
 }
 

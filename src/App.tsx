@@ -1,15 +1,18 @@
 import { AnimatePresence, MotionConfig, motion, useReducedMotion } from 'motion/react'
+import type { TFunction } from 'i18next'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { AlbumArt } from './components/AlbumArt'
-import { Footer, Header } from './components/Shell'
+import { Footer, Header, LanguageToggle } from './components/Shell'
+import type { AppLanguage } from './i18n'
 import { albumCoverUrl, firstCollectionAlbums, firstLibraryAlbums } from './lib/home'
 import { makeId, makeSeed } from './lib/id'
 import { normalizeValue, parseAlbumList } from './lib/importParser'
 import { MusicBrainzClient, automaticMatch, chooseCanonicalEdition } from './lib/musicbrainz'
 import { loadNavigation, saveNavigation } from './lib/navigation'
 import type { Screen } from './lib/navigation'
-import { appendPaceSample, estimateRemainingMs, formatDuration } from './lib/pace'
-import { MODE_DETAILS, battleCount, getBattleState } from './lib/ranking'
+import { appendPaceSample, describeDuration, estimateRemainingMs } from './lib/pace'
+import { RANKING_MODES, battleCount, getBattleState } from './lib/ranking'
 import { albumProfileKey, blendedScores, buildTrackAnalysisSnapshot, DEFAULT_HEART_WEIGHT, findDisagreements, validateManualSummary } from './lib/trackAnalysis'
 import type { Album, AlbumTrackProfile, BattleDecision, BattleRun, CatalogCandidate, Collection, ManualTrackSummary, RankingMode, TrackCatalogEntry, TrackEdition } from './lib/types'
 import { BATTLE_ALGORITHM_VERSION } from './lib/types'
@@ -36,6 +39,28 @@ function nowIso() {
   return new Date().toISOString()
 }
 
+function appLocale(language?: string): AppLanguage {
+  return language === 'pt-BR' ? 'pt-BR' : 'en'
+}
+
+function formatNumber(value: number, language?: string, options?: Intl.NumberFormatOptions): string {
+  return new Intl.NumberFormat(appLocale(language), options).format(value)
+}
+
+function formatDuration(t: TFunction, durationMs: number): string {
+  const descriptor = describeDuration(durationMs)
+  if (descriptor.unit === 'hoursMinutes') return t('duration.hoursMinutes', descriptor)
+  return t(`duration.${descriptor.unit}`, { count: descriptor.count })
+}
+
+function modeName(t: TFunction, mode: RankingMode): string {
+  return t(`modes.${mode}.name`)
+}
+
+function displayArtist(t: TFunction, artist: string): string {
+  return artist === 'Unknown artist' ? t('common.unknownArtist') : artist
+}
+
 function collectionDuplicates(albums: readonly Album[]): Set<string> {
   const seen = new Set<string>()
   const duplicates = new Set<string>()
@@ -58,7 +83,19 @@ interface LibraryProps {
   onViewRun: (collectionId: string, runId: string) => void
 }
 
-const COLLECTION_VIBES = ['Late-night', 'Sunday morning', 'Road trip', 'Deep focus', 'Rainy day', 'Party']
+const COLLECTION_VIBES = [
+  { value: 'Late-night', key: 'lateNight' },
+  { value: 'Sunday morning', key: 'sundayMorning' },
+  { value: 'Road trip', key: 'roadTrip' },
+  { value: 'Deep focus', key: 'deepFocus' },
+  { value: 'Rainy day', key: 'rainyDay' },
+  { value: 'Party', key: 'party' },
+] as const
+
+function displayVibe(t: TFunction, vibe: string): string {
+  const known = COLLECTION_VIBES.find((item) => item.value === vibe)
+  return known ? t(`vibes.${known.key}`) : vibe
+}
 
 const DEMO_RECORDS = [
   { title: 'Afterglow', artist: 'The Quiet Hours', style: 'afterglow' },
@@ -70,8 +107,9 @@ const DEMO_RECORDS = [
 type DemoRecord = (typeof DEMO_RECORDS)[number]
 
 function RitualRecord({ album, demo, delay = 0 }: { album?: Album; demo: DemoRecord; delay?: number }) {
+  const { t } = useTranslation()
   const title = album?.title ?? demo.title
-  const artist = album?.artist ?? demo.artist
+  const artist = displayArtist(t, album?.artist ?? demo.artist)
   return (
     <motion.div
       className="ritual-record"
@@ -81,7 +119,7 @@ function RitualRecord({ album, demo, delay = 0 }: { album?: Album; demo: DemoRec
       {album ? (
         <AlbumArt src={albumCoverUrl(album)} title={title} artist={artist} className="ritual-record__cover" />
       ) : (
-        <div className={`demo-sleeve demo-sleeve--${demo.style} ritual-record__cover`} role="img" aria-label={`Fictional cover for ${title} by ${artist}`}>
+        <div className={`demo-sleeve demo-sleeve--${demo.style} ritual-record__cover`} role="img" aria-label={t('library.fictionalCover', { title, artist })}>
           <span className="demo-sleeve__orbit" aria-hidden="true"><i /></span>
           <b>{title}</b>
         </div>
@@ -92,6 +130,7 @@ function RitualRecord({ album, demo, delay = 0 }: { album?: Album; demo: DemoRec
 }
 
 function LibraryScreen({ collections, onCreate, onRename, onDelete, onImport, onRank, onResume, onViewRun }: LibraryProps) {
+  const { t, i18n } = useTranslation()
   const [setupOpen, setSetupOpen] = useState(false)
   const [name, setName] = useState('')
   const [vibe, setVibe] = useState<string>()
@@ -124,42 +163,42 @@ function LibraryScreen({ collections, onCreate, onRename, onDelete, onImport, on
       <AnimatePresence mode="wait" initial={false}>
         {setupOpen ? (
           <motion.section className="collection-setup" key="setup" {...pageMotion}>
-            <button className="back-button collection-setup__back" type="button" onClick={() => setSetupOpen(false)}>← Back</button>
-            <p className="eyebrow">New collection · Step 1 of 3</p>
-            <h1>Let’s set the <em>stage.</em></h1>
-            <p className="collection-setup__intro">Give this batch a name and a mood. It’s just for you—a way to remember what you were reaching for when you built it.</p>
+            <button className="back-button collection-setup__back" type="button" onClick={() => setSetupOpen(false)}>{t('library.setupBack')}</button>
+            <p className="eyebrow">{t('library.setupStep')}</p>
+            <h1>{t('library.setupTitleBefore')}<em>{t('library.setupTitleEmphasis')}</em></h1>
+            <p className="collection-setup__intro">{t('library.setupIntro')}</p>
             <form className="collection-setup__panel" onSubmit={create}>
-              <label htmlFor="new-collection">Name this collection</label>
+              <label htmlFor="new-collection">{t('library.nameLabel')}</label>
               <input
                 id="new-collection"
                 autoFocus
                 value={name}
                 onChange={(event) => setName(event.target.value)}
-                placeholder="Late-night records"
+                placeholder={t('library.namePlaceholder')}
                 maxLength={80}
               />
 
               <fieldset>
-                <legend>What’s the mood? <span>— optional</span></legend>
+                <legend>{t('library.moodLegend')} <span>— {t('common.optional')}</span></legend>
                 <div className="vibe-list">
-                  {COLLECTION_VIBES.map((label) => (
+                  {COLLECTION_VIBES.map(({ value, key }) => (
                     <button
-                      className={vibe === label ? 'vibe-chip vibe-chip--selected' : 'vibe-chip'}
+                      className={vibe === value ? 'vibe-chip vibe-chip--selected' : 'vibe-chip'}
                       type="button"
-                      aria-pressed={vibe === label}
-                      key={label}
-                      onClick={() => setVibe((current) => current === label ? undefined : label)}
-                    >{label}</button>
+                      aria-pressed={vibe === value}
+                      key={value}
+                      onClick={() => setVibe((current) => current === value ? undefined : value)}
+                    >{t(`vibes.${key}`)}</button>
                   ))}
                 </div>
               </fieldset>
 
-              <label htmlFor="collection-note">A note to your future self <span>— optional</span></label>
-              <textarea id="collection-note" value={note} onChange={(event) => setNote(event.target.value)} placeholder="Records for the long winter evenings…" rows={2} maxLength={280} />
+              <label htmlFor="collection-note">{t('library.noteLabel')} <span>— {t('common.optional')}</span></label>
+              <textarea id="collection-note" value={note} onChange={(event) => setNote(event.target.value)} placeholder={t('library.notePlaceholder')} rows={2} maxLength={280} />
 
               <div className="collection-setup__actions">
-                <button className="button button--primary button--large" type="submit" disabled={!name.trim()}>Add your records →</button>
-                <span>Next: paste your wishlist.</span>
+                <button className="button button--primary button--large" type="submit" disabled={!name.trim()}>{t('library.addRecords')}</button>
+                <span>{t('library.nextPaste')}</span>
               </div>
             </form>
           </motion.section>
@@ -167,41 +206,41 @@ function LibraryScreen({ collections, onCreate, onRename, onDelete, onImport, on
           <motion.div className="library-home" key="home" {...pageMotion}>
             <section className="library-hero">
               <motion.div className="library-hero__copy" variants={homeStagger} initial="hidden" animate="visible">
-                <motion.p className="eyebrow" variants={homeReveal}>Vinyl priority, settled</motion.p>
-                <motion.h1 variants={homeReveal}><span>What</span>{' '}<span>deserves the</span><em>next spin?</em></motion.h1>
-                <motion.p className="lede" variants={homeReveal}>Your wishlist is longer than your budget—and that’s the fun part. Line the records up two at a time, trust your gut, and let Solitude settle the order one honest choice at a time.</motion.p>
+                <motion.p className="eyebrow" variants={homeReveal}>{t('library.eyebrow')}</motion.p>
+                <motion.h1 variants={homeReveal}><span>{t('library.heroFirst')}</span>{' '}<span>{t('library.heroSecond')}</span><em>{t('library.heroEmphasis')}</em></motion.h1>
+                <motion.p className="lede" variants={homeReveal}>{t('library.lede')}</motion.p>
                 <motion.div className="library-hero__actions" variants={homeReveal}>
-                  <button className="button button--primary button--large" type="button" onClick={openSetup}>Start a ranking →</button>
-                  <a href="#shelves">or open a collection you started</a>
+                  <button className="button button--primary button--large" type="button" onClick={openSetup}>{t('library.startRanking')}</button>
+                  <a href="#shelves">{t('library.openStarted')}</a>
                 </motion.div>
-                <motion.ol className="library-steps" aria-label="How Solitude works" variants={homeReveal}>
-                  <li><b>1</b> Paste</li><li><b>2</b> Choose</li><li><b>3</b> A ranking you trust</li>
+                <motion.ol className="library-steps" aria-label={t('library.howItWorks')} variants={homeReveal}>
+                  <li><b>1</b> {t('library.stepPaste')}</li><li><b>2</b> {t('library.stepChoose')}</li><li><b>3</b> {t('library.stepRanking')}</li>
                 </motion.ol>
               </motion.div>
 
-              <motion.aside className="ritual-preview" aria-label="A preview of a ranking battle" initial={{ opacity: 0, x: 34, rotate: 1.2 }} animate={{ opacity: 1, x: 0, rotate: 0 }} transition={{ duration: .62, delay: .18 }} whileHover={{ y: -6, rotate: -.35 }}>
-                <div className="ritual-preview__heading"><span>A glimpse of the ritual</span><span>1 of many</span></div>
+              <motion.aside className="ritual-preview" aria-label={t('library.previewLabel')} initial={{ opacity: 0, x: 34, rotate: 1.2 }} animate={{ opacity: 1, x: 0, rotate: 0 }} transition={{ duration: .62, delay: .18 }} whileHover={{ y: -6, rotate: -.35 }}>
+                <div className="ritual-preview__heading"><span>{t('library.previewHeading')}</span><span>{t('library.previewCount')}</span></div>
                 <div className="ritual-preview__records">
                   <RitualRecord album={ritualAlbums[0]} demo={demoRecords[0]} />
-                  <span className="ritual-preview__or" aria-hidden="true">or</span>
+                  <span className="ritual-preview__or" aria-hidden="true">{t('library.or')}</span>
                   <RitualRecord album={ritualAlbums[1]} demo={demoRecords[1]} delay={-2.3} />
                 </div>
-                <p>Every ranking is built from moments like this—pick the one you’d rather own next, or call it even.</p>
+                <p>{t('library.previewBody')}</p>
               </motion.aside>
             </section>
 
             <motion.section className="library-section" id="shelves" aria-labelledby="your-collections" initial={{ opacity: 0, y: 28 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, amount: .08 }} transition={{ duration: .5 }}>
               <div className="section-heading">
-                <div><p className="eyebrow">The shelves</p><h2 id="your-collections">Your collections</h2></div>
-                <span>{collections.length} {collections.length === 1 ? 'collection' : 'collections'}</span>
+                <div><p className="eyebrow">{t('library.shelves')}</p><h2 id="your-collections">{t('library.collectionsTitle')}</h2></div>
+                <span>{t('common.collection', { count: collections.length })}</span>
               </div>
 
               {collections.length === 0 ? (
                 <div className="empty-shelf">
                   <span className="empty-record" aria-hidden="true" />
-                  <h3>Your shelf is quiet</h3>
-                  <p>Create a collection, then paste in the records you’re considering.</p>
-                  <button className="button button--primary" type="button" onClick={openSetup}>Create your first collection</button>
+                  <h3>{t('library.emptyTitle')}</h3>
+                  <p>{t('library.emptyBody')}</p>
+                  <button className="button button--primary" type="button" onClick={openSetup}>{t('library.createFirst')}</button>
                 </div>
               ) : (
                 <div className="collection-grid">
@@ -213,7 +252,7 @@ function LibraryScreen({ collections, onCreate, onRename, onDelete, onImport, on
                           <AlbumArt
                             src={coverAlbum ? albumCoverUrl(coverAlbum) : undefined}
                             title={coverAlbum?.title ?? collection.name}
-                            artist={coverAlbum?.artist ?? 'No records yet'}
+                            artist={coverAlbum ? displayArtist(t, coverAlbum.artist) : t('library.noRecords')}
                             className="collection-card__cover"
                           />
                           <div className="collection-card__identity">
@@ -226,43 +265,46 @@ function LibraryScreen({ collections, onCreate, onRename, onDelete, onImport, on
                                   setEditingId(undefined)
                                 }}
                               >
-                                <label className="sr-only" htmlFor={`rename-${collection.id}`}>Collection name</label>
+                                <label className="sr-only" htmlFor={`rename-${collection.id}`}>{t('library.collectionName')}</label>
                                 <input id={`rename-${collection.id}`} autoFocus value={editingName} onChange={(event) => setEditingName(event.target.value)} />
-                                <button type="submit" className="text-button">Save</button>
+                                <button type="submit" className="text-button">{t('common.save')}</button>
                               </form>
                             ) : <h3>{collection.name}</h3>}
-                            <p>{collection.albums.length} {collection.albums.length === 1 ? 'record' : 'records'} · Updated {new Date(collection.updatedAt).toLocaleDateString()}</p>
-                            {collection.vibe && <span className="collection-vibe">{collection.vibe}</span>}
+                            <p>{t('library.updated', {
+                              records: t('common.record', { count: collection.albums.length }),
+                              date: new Date(collection.updatedAt).toLocaleDateString(appLocale(i18n.resolvedLanguage)),
+                            })}</p>
+                            {collection.vibe && <span className="collection-vibe">{displayVibe(t, collection.vibe)}</span>}
                           </div>
                         </div>
 
                         {collection.activeRun && (
-                          <button className="resume-strip" type="button" aria-label={`Resume ${collection.name} battle`} onClick={() => onResume(collection.id)}>
-                            <span><strong>Battle in progress</strong><small>{collection.activeRun.decisions.length} choices saved</small></span>
-                            <span aria-hidden="true">Resume →</span>
+                          <button className="resume-strip" type="button" aria-label={t('library.resumeLabel', { name: collection.name })} onClick={() => onResume(collection.id)}>
+                            <span><strong>{t('library.battleInProgress')}</strong><small>{t('library.choicesSaved', { count: collection.activeRun.decisions.length, choices: t('common.choice', { count: collection.activeRun.decisions.length }) })}</small></span>
+                            <span aria-hidden="true">{t('library.resume')}</span>
                           </button>
                         )}
 
                         <div className="card-actions">
                           {collection.albums.length >= 2 && !collection.activeRun && (
-                            <button className="button button--small button--ink" type="button" onClick={() => onRank(collection.id)}>Start ranking</button>
+                            <button className="button button--small button--ink" type="button" onClick={() => onRank(collection.id)}>{t('library.startCardRanking')}</button>
                           )}
                           <button className="button button--small" type="button" onClick={() => onImport(collection.id)}>
-                            {collection.albums.length ? 'Edit list' : 'Add records'}
+                            {collection.albums.length ? t('library.editList') : t('library.addRecordsShort')}
                           </button>
                           <span className="card-actions__spacer" />
-                          <button className="icon-button" type="button" aria-label={`Rename ${collection.name}`} onClick={() => { setEditingId(collection.id); setEditingName(collection.name) }}>✎</button>
-                          <button className="icon-button icon-button--danger" type="button" aria-label={`Delete ${collection.name}`} onClick={() => onDelete(collection.id)}>×</button>
+                          <button className="icon-button" type="button" aria-label={t('library.renameLabel', { name: collection.name })} onClick={() => { setEditingId(collection.id); setEditingName(collection.name) }}>✎</button>
+                          <button className="icon-button icon-button--danger" type="button" aria-label={t('library.deleteLabel', { name: collection.name })} onClick={() => onDelete(collection.id)}>×</button>
                         </div>
 
                         {collection.completedRuns.length > 0 && (
                           <details className="history">
-                            <summary>Ranking history <span>{collection.completedRuns.length}</span></summary>
+                            <summary>{t('library.history')} <span>{formatNumber(collection.completedRuns.length, i18n.resolvedLanguage)}</span></summary>
                             <ul>
                               {[...collection.completedRuns].reverse().slice(0, 5).map((run) => (
                                 <li key={run.id}>
-                                  <span><strong>{MODE_DETAILS.find((mode) => mode.id === run.mode)?.name}</strong><small>{new Date(run.completedAt ?? run.updatedAt).toLocaleString()}</small></span>
-                                  <button type="button" className="text-button" onClick={() => onViewRun(collection.id, run.id)}>View</button>
+                                  <span><strong>{modeName(t, run.mode)}</strong><small>{new Date(run.completedAt ?? run.updatedAt).toLocaleString(appLocale(i18n.resolvedLanguage))}</small></span>
+                                  <button type="button" className="text-button" onClick={() => onViewRun(collection.id, run.id)}>{t('library.view')}</button>
                                 </li>
                               ))}
                             </ul>
@@ -272,7 +314,7 @@ function LibraryScreen({ collections, onCreate, onRename, onDelete, onImport, on
                     )
                   })}
                   <button className="new-collection-card" type="button" onClick={openSetup}>
-                    <span aria-hidden="true">+</span><strong>New collection</strong><small>Start a fresh ranking from a wishlist.</small>
+                    <span aria-hidden="true">+</span><strong>{t('library.newCollection')}</strong><small>{t('library.newCollectionBody')}</small>
                   </button>
                 </div>
               )}
@@ -294,6 +336,7 @@ interface ImportProps {
 }
 
 function ImportScreen({ collection, initialDraft, initialSwapColumns = false, onDraftChange, onBack, onContinue }: ImportProps) {
+  const { t } = useTranslation()
   const [input, setInput] = useState(() => initialDraft ?? collection.albums.map((album) => `${album.title} - ${album.artist}`).join('\n'))
   const [swapColumns, setSwapColumns] = useState(initialSwapColumns)
   const parsed = useMemo(() => parseAlbumList(input, swapColumns), [input, swapColumns])
@@ -303,42 +346,47 @@ function ImportScreen({ collection, initialDraft, initialSwapColumns = false, on
 
   return (
     <div className="page constrained-page">
-      <button className="back-button" type="button" onClick={onBack}>← Collections</button>
+      <button className="back-button" type="button" onClick={onBack}>{t('import.back')}</button>
       <div className="page-title">
-        <p className="eyebrow">01 · Build the listening pile</p>
-        <h1>Paste your <em>wishlist.</em></h1>
-        <p>One album per line. We understand dashes, tabs, “Album by Artist,” and title-only entries.</p>
+        <p className="eyebrow">{t('import.eyebrow')}</p>
+        <h1>{t('import.titleBefore')}<em>{t('import.titleEmphasis')}</em></h1>
+        <p>{t('import.intro')}</p>
       </div>
 
       <div className="import-layout">
         <section className="panel import-editor">
           <div className="panel-heading">
-            <label htmlFor="album-list">Album list</label>
-            <span>{validCount}/100 unique</span>
+            <label htmlFor="album-list">{t('import.listLabel')}</label>
+            <span>{t('import.uniqueCount', { count: validCount })}</span>
           </div>
           <textarea
             id="album-list"
             value={input}
             onChange={(event) => { setInput(event.target.value); onDraftChange(event.target.value, swapColumns) }}
-            placeholder={'Blue Train - John Coltrane\nKind of Blue — Miles Davis\nPromises by Floating Points & Pharoah Sanders'}
+            placeholder={t('import.placeholder')}
             spellCheck="false"
           />
           <label className="switch-row">
             <input type="checkbox" checked={swapColumns} onChange={(event) => { setSwapColumns(event.target.checked); onDraftChange(input, event.target.checked) }} />
-            <span><strong>Artist comes first</strong><small>Swap the Artist and Album columns for every two-column line.</small></span>
+            <span><strong>{t('import.artistFirst')}</strong><small>{t('import.artistFirstHelp')}</small></span>
           </label>
         </section>
 
         <section className="panel preview-panel" aria-live="polite">
-          <div className="panel-heading"><h2>Import preview</h2><span>{visibleLines.length} lines</span></div>
+          <div className="panel-heading"><h2>{t('import.preview')}</h2><span>{t('common.line', { count: visibleLines.length })}</span></div>
           {visibleLines.length === 0 ? (
-            <div className="preview-empty"><span aria-hidden="true">♪</span><p>Your parsed albums will appear here.</p></div>
+            <div className="preview-empty"><span aria-hidden="true">♪</span><p>{t('import.empty')}</p></div>
           ) : (
             <ol className="parse-list">
               {visibleLines.map((line) => (
                 <li className={line.error || line.duplicateOf ? 'parse-line parse-line--error' : 'parse-line'} key={line.line}>
                   <span>{line.line}</span>
-                  <div><strong>{line.title || 'Could not read line'}</strong><small>{line.error ?? (line.duplicateOf ? `Duplicate of line ${line.duplicateOf}` : line.artist)}</small></div>
+                  <div>
+                    <strong>{line.title || t('import.couldNotRead')}</strong>
+                    <small>{line.error
+                      ? t(`parser.${line.error.code}`, line.error.values)
+                      : line.duplicateOf ? t('import.duplicate', { line: line.duplicateOf }) : displayArtist(t, line.artist)}</small>
+                  </div>
                   <i aria-hidden="true">{line.error || line.duplicateOf ? '!' : '✓'}</i>
                 </li>
               ))}
@@ -348,16 +396,16 @@ function ImportScreen({ collection, initialDraft, initialSwapColumns = false, on
       </div>
 
       <div className="validation-summary" aria-live="polite">
-        {validCount < 2 && <p>Add at least two unique albums to continue.</p>}
-        {parsed.duplicateCount > 0 && <p>Resolve {parsed.duplicateCount} duplicate {parsed.duplicateCount === 1 ? 'line' : 'lines'} before continuing.</p>}
-        {parsed.invalidCount > 0 && <p>Fix {parsed.invalidCount} unreadable or over-limit {parsed.invalidCount === 1 ? 'line' : 'lines'}.</p>}
-        {validCount > 40 && <p className="warning">A deep ranking of {validCount} albums can take a long time. Quick mode will still be available.</p>}
+        {validCount < 2 && <p>{t('import.minimum')}</p>}
+        {parsed.duplicateCount > 0 && <p>{t('import.duplicates', { count: parsed.duplicateCount })}</p>}
+        {parsed.invalidCount > 0 && <p>{t('import.invalid', { count: parsed.invalidCount })}</p>}
+        {validCount > 40 && <p className="warning">{t('import.warning', { count: validCount })}</p>}
       </div>
 
       <div className="page-actions">
-        <p>Next, you’ll review metadata and cover art.</p>
+        <p>{t('import.next')}</p>
         <button className="button button--primary" type="button" disabled={!canContinue} onClick={() => onContinue(parsed.albums)}>
-          Review {validCount || ''} albums →
+          {t('import.review', { count: validCount })}
         </button>
       </div>
     </div>
@@ -374,9 +422,10 @@ interface ReviewProps {
 }
 
 function ReviewScreen({ collection, client, onBack, onChange, onRemove, onContinue }: ReviewProps) {
+  const { t, i18n } = useTranslation()
   const [results, setResults] = useState<Record<string, CatalogCandidate[]>>({})
   const [loading, setLoading] = useState<Record<string, boolean>>({})
-  const [errors, setErrors] = useState<Record<string, string>>({})
+  const [errors, setErrors] = useState<Record<string, 'noMatches' | 'searchFailed' | undefined>>({})
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   const [matchingAll, setMatchingAll] = useState(false)
   const [bulkProgress, setBulkProgress] = useState<{ searched: number; total: number; covers: number; coverTotal: number }>()
@@ -426,7 +475,7 @@ function ReviewScreen({ collection, client, onBack, onChange, onRemove, onContin
 
   const searchAlbum = useCallback(async (album: Album, bypassCache = false) => {
     setLoading((current) => ({ ...current, [album.id]: true }))
-    setErrors((current) => ({ ...current, [album.id]: '' }))
+    setErrors((current) => ({ ...current, [album.id]: undefined }))
     if (bypassCache && album.matchStatus === 'matched') onChange(album.id, { matchStatus: 'pending', automaticMatch: undefined })
     try {
       const matches = await client.search(album.title, album.artist, bypassCache)
@@ -443,9 +492,9 @@ function ReviewScreen({ collection, client, onBack, onChange, onRemove, onContin
         setResults((current) => ({ ...current, [album.id]: matches }))
         onChange(album.id, { matchStatus: matches.length ? 'weak' : 'manual', automaticMatch: undefined })
       }
-      if (!matches.length) setErrors((current) => ({ ...current, [album.id]: 'No catalog matches found. You can continue manually.' }))
-    } catch (error) {
-      setErrors((current) => ({ ...current, [album.id]: error instanceof Error ? error.message : 'Search failed.' }))
+      if (!matches.length) setErrors((current) => ({ ...current, [album.id]: 'noMatches' }))
+    } catch {
+      setErrors((current) => ({ ...current, [album.id]: 'searchFailed' }))
       onChange(album.id, { matchStatus: 'error' })
     } finally {
       setLoading((current) => ({ ...current, [album.id]: false }))
@@ -478,25 +527,27 @@ function ReviewScreen({ collection, client, onBack, onChange, onRemove, onContin
 
   return (
     <div className="page constrained-page review-page">
-      <button className="back-button" type="button" onClick={onBack}>← Import</button>
+      <button className="back-button" type="button" onClick={onBack}>{t('review.back')}</button>
       <div className="page-title review-title">
         <div>
-          <p className="eyebrow">02 · Check the sleeves</p>
-          <h1>Review your <em>records.</em></h1>
-          <p>We’ll settle the obvious matches quietly. You only need to step in when the catalog is unsure.</p>
+          <p className="eyebrow">{t('review.eyebrow')}</p>
+          <h1>{t('review.titleBefore')}<em>{t('review.titleEmphasis')}</em></h1>
+          <p>{t('review.intro')}</p>
         </div>
       </div>
 
-      <section className={`catalog-console ${matchingAll ? 'catalog-console--active' : ''}`} aria-label="Catalog matching status">
+      <section className={`catalog-console ${matchingAll ? 'catalog-console--active' : ''}`} aria-label={t('review.consoleLabel')}>
         <div className="catalog-console__record" aria-hidden="true"><i /></div>
         <div className="catalog-console__copy">
-          <span className="eyebrow">Catalog session</span>
-          <strong>{matchingAll && bulkProgress ? `${bulkProgress.searched} of ${bulkProgress.total} searched` : `${matchedCount} matched · ${unresolvedCount} need attention`}</strong>
-          <small>{matchingAll ? 'Strong matches fold away as they arrive. Cover art continues in parallel.' : 'Cached matches appear immediately; new MusicBrainz searches are paced responsibly.'}</small>
+          <span className="eyebrow">{t('review.session')}</span>
+          <strong>{matchingAll && bulkProgress
+            ? t('review.searched', { searched: formatNumber(bulkProgress.searched, i18n.resolvedLanguage), total: formatNumber(bulkProgress.total, i18n.resolvedLanguage) })
+            : t('review.status', { matched: formatNumber(matchedCount, i18n.resolvedLanguage), unresolved: formatNumber(unresolvedCount, i18n.resolvedLanguage) })}</strong>
+          <small>{matchingAll ? t('review.matchingHelp') : t('review.idleHelp')}</small>
           <div className="catalog-progress" aria-hidden="true"><motion.i animate={{ width: `${bulkProgress?.total ? (bulkProgress.searched / bulkProgress.total) * 100 : matchedCount / Math.max(1, collection.albums.length) * 100}%` }} /></div>
         </div>
         <button className="button button--primary" type="button" disabled={matchingAll || unresolvedCount === 0} onClick={matchAll}>
-          {matchingAll ? 'Matching…' : unresolvedCount ? `Match ${unresolvedCount} unresolved` : 'All matched'}
+          {matchingAll ? t('review.matching') : unresolvedCount ? t('review.matchUnresolved', { count: unresolvedCount }) : t('review.allMatched')}
         </button>
       </section>
 
@@ -506,9 +557,9 @@ function ReviewScreen({ collection, client, onBack, onChange, onRemove, onContin
           const resolved = album.matchStatus === 'matched' && !expanded.has(album.id)
           const statusText = album.matchStatus === 'matched'
             ? album.matchKind === 'fuzzy'
-              ? `${album.automaticMatch ? 'Auto-corrected' : 'Catalog matched'} · ${Math.round((album.matchConfidence ?? 0) * 100)}%`
-              : 'Catalog matched'
-            : album.matchStatus === 'weak' ? 'Choose a match' : album.matchStatus === 'error' ? 'Search error' : album.matchStatus === 'manual' ? 'Manual details' : 'Not matched'
+              ? t(album.automaticMatch ? 'review.autoCorrected' : 'review.catalogMatchedConfidence', { confidence: formatNumber(Math.round((album.matchConfidence ?? 0) * 100), i18n.resolvedLanguage) })
+              : t('review.catalogMatched')
+            : album.matchStatus === 'weak' ? t('review.chooseMatch') : album.matchStatus === 'error' ? t('review.searchError') : album.matchStatus === 'manual' ? t('review.manualDetails') : t('review.notMatched')
           return (
             <motion.article
               layout
@@ -519,60 +570,60 @@ function ReviewScreen({ collection, client, onBack, onChange, onRemove, onContin
               transition={{ delay: Math.min(index * 0.035, 0.35), layout: { duration: 0.24 } }}
             >
               <span className="review-number">{String(index + 1).padStart(2, '0')}</span>
-              <AlbumArt src={album.coverUrl} title={album.title} artist={album.artist} fallback="artist" />
+              <AlbumArt src={album.coverUrl} title={album.title} artist={displayArtist(t, album.artist)} fallback="artist" />
               {resolved ? (
                 <div className="review-resolved">
                   <div className="review-resolved__identity">
                     <span className={`status status--${album.matchStatus}`}>{statusText}</span>
                     <h2>{album.title}</h2>
-                    <p>{album.artist}{album.year ? ` · ${album.year}` : ''}</p>
+                    <p>{displayArtist(t, album.artist)}{album.year ? ` · ${formatNumber(album.year, i18n.resolvedLanguage, { useGrouping: false })}` : ''}</p>
                   </div>
                   <div className="review-resolved__actions">
-                    <button className="text-button" type="button" onClick={() => setExpanded((current) => new Set(current).add(album.id))}>Edit details</button>
-                    <button className="text-button" type="button" disabled={loading[album.id]} onClick={() => searchAlbum(album, true)}>Rematch</button>
-                    <button className="text-button text-button--danger" type="button" onClick={() => onRemove(album.id)}>Remove</button>
+                    <button className="text-button" type="button" onClick={() => setExpanded((current) => new Set(current).add(album.id))}>{t('review.editDetails')}</button>
+                    <button className="text-button" type="button" disabled={loading[album.id]} onClick={() => searchAlbum(album, true)}>{t('review.rematch')}</button>
+                    <button className="text-button text-button--danger" type="button" onClick={() => onRemove(album.id)}>{t('common.remove')}</button>
                   </div>
-                  {album.coverStatus === 'checking' && <p className="cover-note" role="status">Cover arriving from the archive…</p>}
-                  {album.coverStatus === 'missing' && <p className="cover-note">No archive cover—showing an artist-inspired fallback. Edit to add a custom HTTPS URL.</p>}
+                  {album.coverStatus === 'checking' && <p className="cover-note" role="status">{t('review.coverArriving')}</p>}
+                  {album.coverStatus === 'missing' && <p className="cover-note">{t('review.coverMissingEdit')}</p>}
                   {album.coverStatus === 'error' && (
-                    <p className="cover-note">Cover check failed. <button className="text-button" type="button" onClick={() => album.releaseGroupId && resolveCover(album.id, album.releaseGroupId, true)}>Retry cover</button></p>
+                    <p className="cover-note">{t('review.coverFailed')} <button className="text-button" type="button" onClick={() => album.releaseGroupId && resolveCover(album.id, album.releaseGroupId, true)}>{t('review.retryCover')}</button></p>
                   )}
                 </div>
               ) : (
                 <div className="review-fields">
                   <div className="review-open__heading">
-                    <div><span className={`status status--${album.matchStatus}`}>{statusText}</span><h2>{album.title}</h2><p>{album.artist}</p></div>
-                    {loading[album.id] && <span className="search-pulse" role="status"><i /> Listening for a match…</span>}
+                    <div><span className={`status status--${album.matchStatus}`}>{statusText}</span><h2>{album.title}</h2><p>{displayArtist(t, album.artist)}</p></div>
+                    {loading[album.id] && <span className="search-pulse" role="status"><i /> {t('review.listening')}</span>}
                   </div>
                   <div className="field-pair">
-                    <label>Album title<input value={album.title} onChange={(event) => onChange(album.id, { title: event.target.value, releaseGroupId: undefined, matchStatus: 'manual', matchConfidence: undefined, matchKind: undefined, automaticMatch: undefined })} /></label>
-                    <label>Artist<input value={album.artist} onChange={(event) => onChange(album.id, { artist: event.target.value, releaseGroupId: undefined, matchStatus: 'manual', matchConfidence: undefined, matchKind: undefined, automaticMatch: undefined })} /></label>
+                    <label>{t('review.albumTitle')}<input value={album.title} onChange={(event) => onChange(album.id, { title: event.target.value, releaseGroupId: undefined, matchStatus: 'manual', matchConfidence: undefined, matchKind: undefined, automaticMatch: undefined })} /></label>
+                    <label>{t('review.artist')}<input value={album.artist} onChange={(event) => onChange(album.id, { artist: event.target.value, releaseGroupId: undefined, matchStatus: 'manual', matchConfidence: undefined, matchKind: undefined, automaticMatch: undefined })} /></label>
                   </div>
                   <div className="field-pair field-pair--minor">
-                    <label>Year<input inputMode="numeric" value={album.year ?? ''} onChange={(event) => onChange(album.id, { year: event.target.value ? Number(event.target.value) : undefined })} /></label>
-                    <label>HTTPS cover URL<input type="url" value={album.coverUrl ?? ''} placeholder="https://…" onChange={(event) => onChange(album.id, { coverUrl: event.target.value || undefined, coverStatus: event.target.value ? 'custom' : undefined, releaseGroupId: undefined, matchStatus: 'manual', matchConfidence: undefined, matchKind: undefined, automaticMatch: undefined })} /></label>
+                    <label>{t('review.year')}<input inputMode="numeric" value={album.year ?? ''} onChange={(event) => onChange(album.id, { year: event.target.value ? Number(event.target.value) : undefined })} /></label>
+                    <label>{t('review.coverUrl')}<input type="url" value={album.coverUrl ?? ''} placeholder="https://…" onChange={(event) => onChange(album.id, { coverUrl: event.target.value || undefined, coverStatus: event.target.value ? 'custom' : undefined, releaseGroupId: undefined, matchStatus: 'manual', matchConfidence: undefined, matchKind: undefined, automaticMatch: undefined })} /></label>
                   </div>
                   <div className="match-row">
-                    <button className="button button--small button--ink" type="button" disabled={loading[album.id]} onClick={() => searchAlbum(album, true)}>{loading[album.id] ? 'Searching…' : 'Find a better match'}</button>
-                    {album.releaseGroupId && <button className="text-button" type="button" onClick={() => setExpanded((current) => { const next = new Set(current); next.delete(album.id); return next })}>Done editing</button>}
-                    <button className="text-button text-button--danger" type="button" onClick={() => onRemove(album.id)}>Remove</button>
+                    <button className="button button--small button--ink" type="button" disabled={loading[album.id]} onClick={() => searchAlbum(album, true)}>{loading[album.id] ? t('review.searching') : t('review.findBetter')}</button>
+                    {album.releaseGroupId && <button className="text-button" type="button" onClick={() => setExpanded((current) => { const next = new Set(current); next.delete(album.id); return next })}>{t('review.doneEditing')}</button>}
+                    <button className="text-button text-button--danger" type="button" onClick={() => onRemove(album.id)}>{t('common.remove')}</button>
                   </div>
-                  {duplicates.has(key) && <p className="field-error">This duplicates another album in the collection.</p>}
-                  {album.coverUrl && !album.coverUrl.startsWith('https://') && <p className="field-error">Custom cover URLs must begin with https://</p>}
-                  {album.coverStatus === 'checking' && <p className="cover-note" role="status">Cover arriving from the archive…</p>}
-                  {album.coverStatus === 'missing' && <p className="cover-note">No archive cover—showing an artist-inspired fallback. Add a custom HTTPS URL if you have one.</p>}
+                  {duplicates.has(key) && <p className="field-error">{t('review.duplicate')}</p>}
+                  {album.coverUrl && !album.coverUrl.startsWith('https://') && <p className="field-error">{t('review.invalidCover')}</p>}
+                  {album.coverStatus === 'checking' && <p className="cover-note" role="status">{t('review.coverArriving')}</p>}
+                  {album.coverStatus === 'missing' && <p className="cover-note">{t('review.coverMissingAdd')}</p>}
                   {album.coverStatus === 'error' && (
-                    <p className="cover-note">Cover check failed. <button className="text-button" type="button" onClick={() => album.releaseGroupId && resolveCover(album.id, album.releaseGroupId, true)}>Retry cover</button></p>
+                    <p className="cover-note">{t('review.coverFailed')} <button className="text-button" type="button" onClick={() => album.releaseGroupId && resolveCover(album.id, album.releaseGroupId, true)}>{t('review.retryCover')}</button></p>
                   )}
-                  {errors[album.id] && <p className="field-error" role="alert">{errors[album.id]}</p>}
+                  {errors[album.id] && <p className="field-error" role="alert">{t(`review.${errors[album.id]}`)}</p>}
                   {(results[album.id]?.length ?? 0) > 0 && (
-                    <div className="candidate-list" aria-label={`Matches for ${album.title}`}>
-                      <p><strong>The catalog is unsure.</strong> Pick the sleeve that feels right.</p>
+                    <div className="candidate-list" aria-label={t('review.matchesFor', { title: album.title })}>
+                      <p><strong>{t('review.catalogUnsure')}</strong> {t('review.catalogUnsureHelp')}</p>
                       {results[album.id].map((candidate) => (
                         <button type="button" key={candidate.id} onClick={() => selectMatch(album, candidate)}>
-                          <AlbumArt src={candidate.coverUrl} title={candidate.title} artist={candidate.artist} fallback="artist" />
-                          <span><strong>{candidate.title}</strong><small>{candidate.artist}{candidate.year ? ` · ${candidate.year}` : ''} · {Math.round(candidate.confidence * 100)}% confidence</small></span>
-                          <i>{candidate.weak ? 'Low confidence' : 'Choose'}</i>
+                          <AlbumArt src={candidate.coverUrl} title={candidate.title} artist={displayArtist(t, candidate.artist)} fallback="artist" />
+                          <span><strong>{candidate.title}</strong><small>{displayArtist(t, candidate.artist)}{candidate.year ? ` · ${formatNumber(candidate.year, i18n.resolvedLanguage, { useGrouping: false })}` : ''} · {t('review.confidence', { confidence: formatNumber(Math.round(candidate.confidence * 100), i18n.resolvedLanguage) })}</small></span>
+                          <i>{candidate.weak ? t('review.lowConfidence') : t('common.choose')}</i>
                         </button>
                       ))}
                     </div>
@@ -585,9 +636,9 @@ function ReviewScreen({ collection, client, onBack, onChange, onRemove, onContin
       </div>
 
       <div className="page-actions sticky-actions">
-        <p>{collection.albums.length} unique albums · Minimum 2, maximum 100</p>
+        <p>{t('review.uniqueRange', { albums: t('common.album', { count: collection.albums.length }) })}</p>
         <button className="button button--primary" type="button" disabled={collection.albums.length < 2 || collection.albums.length > 100 || duplicates.size > 0 || invalidCover} onClick={onContinue}>
-          Choose ranking mode →
+          {t('review.continue')}
         </button>
       </div>
     </div>
@@ -604,19 +655,21 @@ interface ModeProps {
 }
 
 function ModeScreen({ collection, paceSamples, selected, onSelected, onBack, onStart }: ModeProps) {
+  const { t, i18n } = useTranslation()
+  const title = t('modes.titleBefore').split('\n')
   return (
     <div className="page constrained-page mode-page">
-      <button className="back-button" type="button" onClick={onBack}>← Review records</button>
+      <button className="back-button" type="button" onClick={onBack}>{t('modes.back')}</button>
       <div className="page-title page-title--center">
-        <p className="eyebrow">03 · Set the listening depth</p>
-        <h1>How certain do you<br />want to <em>feel?</em></h1>
-        <p>You can pick a new mode before every run. Choose either record, or call it a tie when neither comes first.</p>
+        <p className="eyebrow">{t('modes.eyebrow')}</p>
+        <h1>{title[0]}<br />{title[1]}<em>{t('modes.titleEmphasis')}</em></h1>
+        <p>{t('modes.intro')}</p>
       </div>
-      {collection.albums.length > 40 && <div className="long-list-warning"><strong>A substantial listening pile.</strong> Thorough mode needs {battleCount('thorough', collection.albums.length).toLocaleString()} choices; consider Quick or Balanced.</div>}
-      <div className="mode-grid" role="radiogroup" aria-label="Ranking mode">
-        {MODE_DETAILS.map((mode) => {
+      {collection.albums.length > 40 && <div className="long-list-warning"><strong>{t('modes.longWarningTitle')}</strong> {t('modes.longWarning', { count: formatNumber(battleCount('thorough', collection.albums.length), i18n.resolvedLanguage) })}</div>}
+      <div className="mode-grid" role="radiogroup" aria-label={t('modes.groupLabel')}>
+        {RANKING_MODES.map((mode) => {
           const count = battleCount(mode.id, collection.albums.length)
-          const duration = formatDuration(estimateRemainingMs(count, paceSamples))
+          const duration = formatDuration(t, estimateRemainingMs(count, paceSamples))
           return (
             <button
               type="button"
@@ -626,23 +679,23 @@ function ModeScreen({ collection, paceSamples, selected, onSelected, onBack, onS
               key={mode.id}
               onClick={() => onSelected(mode.id)}
             >
-              {mode.recommended && <span className="recommended">Recommended</span>}
+              {mode.recommended && <span className="recommended">{t('modes.recommended')}</span>}
               <span className="mode-check" aria-hidden="true">{selected === mode.id ? '●' : '○'}</span>
-              <p className="eyebrow">{mode.eyebrow}</p>
-              <h2>{mode.name}</h2>
-              <p>{mode.description}</p>
+              <p className="eyebrow">{t(`modes.${mode.id}.eyebrow`)}</p>
+              <h2>{modeName(t, mode.id)}</h2>
+              <p>{t(`modes.${mode.id}.description`)}</p>
               <dl>
-                <div><dt>Exactly</dt><dd>{count.toLocaleString()} battles</dd></div>
-                <div><dt>About</dt><dd>{duration}</dd></div>
+                <div><dt>{t('modes.exactly')}</dt><dd>{t('modes.battles', { count, formattedCount: formatNumber(count, i18n.resolvedLanguage) })}</dd></div>
+                <div><dt>{t('modes.about')}</dt><dd>{duration}</dd></div>
               </dl>
-              <ul><li className="pro">+ {mode.pro}</li><li className="con">− {mode.con}</li></ul>
+              <ul><li className="pro">+ {t(`modes.${mode.id}.pro`)}</li><li className="con">− {t(`modes.${mode.id}.con`)}</li></ul>
             </button>
           )
         })}
       </div>
       <div className="page-actions page-actions--center">
-        <p>Initial order, adaptive tie-breaks, and left/right placement are randomized with a saved seed.</p>
-        <button className="button button--primary button--large" type="button" onClick={() => onStart(selected)}>Begin {MODE_DETAILS.find((mode) => mode.id === selected)?.name} battle →</button>
+        <p>{t('modes.seedHelp')}</p>
+        <button className="button button--primary button--large" type="button" onClick={() => onStart(selected)}>{t('modes.begin', { mode: modeName(t, selected) })}</button>
       </div>
     </div>
   )
@@ -659,6 +712,7 @@ interface BattleProps {
 }
 
 function BattleScreen({ collection, run, paceSamples, onChoose, onUndo, onRestart, onExit }: BattleProps) {
+  const { t, i18n } = useTranslation()
   const reduceMotion = useReducedMotion()
   const battle = useMemo(() => getBattleState(run.mode, collection.albums.map((album) => album.id), run.seed, run.decisions), [collection.albums, run])
   const startedAt = useRef(Date.now())
@@ -722,28 +776,32 @@ function BattleScreen({ collection, run, paceSamples, onChoose, onUndo, onRestar
     return () => window.removeEventListener('keydown', keyHandler)
   }, [choose, left, right])
 
-  if (!left || !right) return <div className="page battle-page"><p>Preparing your ranking…</p></div>
+  if (!left || !right) return <div className="page battle-page"><p>{t('battle.preparing')}</p></div>
 
   return (
     <div className="page battle-page">
       <div className="battle-topbar">
-        <button className="back-button back-button--light" type="button" disabled={Boolean(activeSelection)} onClick={() => { cancelPendingSelection(); onExit() }}>← Save & exit</button>
-        <div><strong>{collection.name}</strong><span>{MODE_DETAILS.find((mode) => mode.id === run.mode)?.name} mode</span></div>
+        <button className="back-button back-button--light" type="button" disabled={Boolean(activeSelection)} onClick={() => { cancelPendingSelection(); onExit() }}>{t('battle.exit')}</button>
+        <div><strong>{collection.name}</strong><span>{t('modes.modeLabel', { mode: modeName(t, run.mode) })}</span></div>
         <div className="battle-utilities">
-          <button className="undo-button" type="button" disabled={!run.decisions.length || Boolean(activeSelection)} onClick={() => { cancelPendingSelection(); onUndo() }}>↶ Undo</button>
-          <button className="undo-button" type="button" disabled={Boolean(activeSelection)} onClick={() => { cancelPendingSelection(); onRestart() }}>Restart</button>
+          <button className="undo-button" type="button" disabled={!run.decisions.length || Boolean(activeSelection)} onClick={() => { cancelPendingSelection(); onUndo() }}>{t('battle.undo')}</button>
+          <button className="undo-button" type="button" disabled={Boolean(activeSelection)} onClick={() => { cancelPendingSelection(); onRestart() }}>{t('battle.restart')}</button>
+          <LanguageToggle dark />
         </div>
       </div>
       <div className="battle-progress">
-        <div className="battle-progress__labels"><span>Battle {completed + 1} <i>of {battle.totalComparisons}</i></span><span>About {formatDuration(estimateRemainingMs(remaining, paceSamples))} left</span></div>
+        <div className="battle-progress__labels">
+          <span>{t('battle.progress', { current: formatNumber(completed + 1, i18n.resolvedLanguage) })} <i>{t('battle.of', { total: formatNumber(battle.totalComparisons, i18n.resolvedLanguage) })}</i></span>
+          <span>{t('battle.remaining', { duration: formatDuration(t, estimateRemainingMs(remaining, paceSamples)) })}</span>
+        </div>
         <div className="progress-track"><motion.div animate={{ width: `${progress}%` }} transition={{ duration: 0.3 }} /></div>
       </div>
-      <div className="sr-only" aria-live="polite">Choose between {left.title} by {left.artist} and {right.title} by {right.artist}.</div>
+      <div className="sr-only" aria-live="polite">{t('battle.chooseBetween', { leftTitle: left.title, leftArtist: displayArtist(t, left.artist), rightTitle: right.title, rightArtist: displayArtist(t, right.artist) })}</div>
 
       <div className="battle-prompt">
-        <p className="eyebrow">Trust your instinct</p>
-        <h1>Which record comes <em>first?</em></h1>
-        <p>Choose the album you’d rather own next, or call it even when neither comes first.</p>
+        <p className="eyebrow">{t('battle.eyebrow')}</p>
+        <h1>{t('battle.titleBefore')}<em>{t('battle.titleEmphasis')}</em></h1>
+        <p>{t('battle.prompt')}</p>
       </div>
 
       <AnimatePresence mode="wait" initial={false}>
@@ -767,10 +825,10 @@ function BattleScreen({ collection, run, paceSamples, onChoose, onUndo, onRestar
             whileTap={{ scale: 0.985 }}
           >
             <span className="choice-key">1 · ←</span>
-            <AlbumArt src={left.coverUrl} title={left.title} artist={left.artist} />
-            <span className="choice-copy"><strong>{left.title}</strong><small>{left.artist}{left.year ? ` · ${left.year}` : ''}</small><i>Choose this record</i></span>
+            <AlbumArt src={left.coverUrl} title={left.title} artist={displayArtist(t, left.artist)} />
+            <span className="choice-copy"><strong>{left.title}</strong><small>{displayArtist(t, left.artist)}{left.year ? ` · ${formatNumber(left.year, i18n.resolvedLanguage, { useGrouping: false })}` : ''}</small><i>{t('battle.chooseRecord')}</i></span>
           </motion.button>
-          <motion.span className="versus" aria-hidden="true" animate={activeSelection?.outcome === 'win' ? { scale: 0, rotate: 180, opacity: 0 } : activeSelection?.outcome === 'tie' ? { scale: 1.12, rotate: 0, opacity: 1 } : { scale: 1, rotate: 0, opacity: 1 }}>or</motion.span>
+          <motion.span className="versus" aria-hidden="true" animate={activeSelection?.outcome === 'win' ? { scale: 0, rotate: 180, opacity: 0 } : activeSelection?.outcome === 'tie' ? { scale: 1.12, rotate: 0, opacity: 1 } : { scale: 1, rotate: 0, opacity: 1 }}>{t('battle.or')}</motion.span>
           <motion.button
             className="choice-card"
             type="button"
@@ -783,8 +841,8 @@ function BattleScreen({ collection, run, paceSamples, onChoose, onUndo, onRestar
             whileTap={{ scale: 0.985 }}
           >
             <span className="choice-key">2 · →</span>
-            <AlbumArt src={right.coverUrl} title={right.title} artist={right.artist} />
-            <span className="choice-copy"><strong>{right.title}</strong><small>{right.artist}{right.year ? ` · ${right.year}` : ''}</small><i>Choose this record</i></span>
+            <AlbumArt src={right.coverUrl} title={right.title} artist={displayArtist(t, right.artist)} />
+            <span className="choice-copy"><strong>{right.title}</strong><small>{displayArtist(t, right.artist)}{right.year ? ` · ${formatNumber(right.year, i18n.resolvedLanguage, { useGrouping: false })}` : ''}</small><i>{t('battle.chooseRecord')}</i></span>
           </motion.button>
         </motion.div>
       </AnimatePresence>
@@ -799,9 +857,9 @@ function BattleScreen({ collection, run, paceSamples, onChoose, onUndo, onRestar
         whileTap={{ scale: .98 }}
       >
         <kbd>0</kbd>
-        <span>Can’t decide</span>
+        <span>{t('battle.cantDecide')}</span>
       </motion.button>
-      <p className="keyboard-hint">Keyboard: <kbd>←</kbd> / <kbd>1</kbd> for left · <kbd>0</kbd> for a tie · <kbd>→</kbd> / <kbd>2</kbd> for right</p>
+      <p className="keyboard-hint">{t('battle.keyboard')} <kbd>←</kbd> / <kbd>1</kbd> {t('battle.keyboardLeft')} · <kbd>0</kbd> {t('battle.keyboardTie')} · <kbd>→</kbd> / <kbd>2</kbd> {t('battle.keyboardRight')}</p>
     </div>
   )
 }
@@ -824,6 +882,7 @@ interface TrackReviewProps {
 }
 
 function TrackReviewScreen({ collection, run, client, profiles, currentAlbumId, onCurrentAlbum, onCommit, onExit }: TrackReviewProps) {
+  const { t, i18n } = useTranslation()
   const albums = run.albumSnapshot ?? collection.albums
   const initialIndex = Math.max(0, albums.findIndex((album) => album.id === currentAlbumId))
   const [index, setIndex] = useState(initialIndex)
@@ -834,7 +893,7 @@ function TrackReviewScreen({ collection, run, client, profiles, currentAlbumId, 
   const [manualMode, setManualMode] = useState(() => Boolean(profile?.manualSummary || !album?.releaseGroupId))
   const [loading, setLoading] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
-  const [error, setError] = useState<string>()
+  const [error, setError] = useState<'loadFailed' | 'moreFailed'>()
 
   useEffect(() => {
     if (!album) return
@@ -856,16 +915,16 @@ function TrackReviewScreen({ collection, run, client, profiles, currentAlbumId, 
       setCatalog(result)
       setDraft((current) => ({ ...current, editionId: current.editionId ?? chooseCanonicalEdition(result.editions)?.id }))
       if (!result.editions.length) setManualMode(true)
-    }).catch((reason: unknown) => {
+    }).catch(() => {
       if (cancelled) return
-      setError(reason instanceof Error ? reason.message : 'No tracklist could be loaded.')
+      setError('loadFailed')
       setManualMode(true)
     }).finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [album?.id, client])
 
   if (!album) {
-    return <div className="page constrained-page"><h1>No albums to review</h1><button className="button" type="button" onClick={onExit}>Return to results</button></div>
+    return <div className="page constrained-page"><h1>{t('trackReview.noAlbums')}</h1><button className="button" type="button" onClick={onExit}>{t('trackReview.returnResults')}</button></div>
   }
 
   const profileEdition: TrackEdition | undefined = profile?.editionId && profile.tracks.length ? {
@@ -935,8 +994,8 @@ function TrackReviewScreen({ collection, run, client, profiles, currentAlbumId, 
       const page = await client.editions(album.releaseGroupId, catalog.offset)
       const byId = new Map([...catalog.editions, ...page.editions].map((edition) => [edition.id, edition]))
       setCatalog({ ...page, editions: [...byId.values()] })
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'More editions could not be loaded.')
+    } catch {
+      setError('moreFailed')
     } finally {
       setLoadingMore(false)
     }
@@ -945,43 +1004,47 @@ function TrackReviewScreen({ collection, run, client, profiles, currentAlbumId, 
   return (
     <div className="page constrained-page track-review-page">
       <div className="track-review-topbar">
-        <button className="back-button" type="button" onClick={onExit}>← Save & return to results</button>
-        <span>{index + 1} of {albums.length}</span>
+        <button className="back-button" type="button" onClick={onExit}>{t('trackReview.saveReturn')}</button>
+        <span>{t('trackReview.progress', { current: formatNumber(index + 1, i18n.resolvedLanguage), total: formatNumber(albums.length, i18n.resolvedLanguage) })}</span>
       </div>
       <div className="track-review-heading">
-        <p className="eyebrow">A closer listen · optional</p>
-        <h1 aria-label="Keep the songs that stay with you.">Keep the songs that<br /><em>stay with you.</em></h1>
-        <p>Untouched songs are neutral. Select the heart for any song you like; songs are never ranked against one another.</p>
+        <p className="eyebrow">{t('trackReview.eyebrow')}</p>
+        <h1 aria-label={t('trackReview.titleLabel')}>{t('trackReview.titleBefore').split('\n')[0]}<br /><em>{t('trackReview.titleEmphasis')}</em></h1>
+        <p>{t('trackReview.intro')}</p>
       </div>
       <section className="track-review-card" aria-labelledby="track-album-title">
         <div className="track-review-sleeve">
-          <AlbumArt src={album.coverUrl} title={album.title} artist={album.artist} />
+          <AlbumArt src={album.coverUrl} title={album.title} artist={displayArtist(t, album.artist)} />
           <span>{String(index + 1).padStart(2, '0')}</span>
         </div>
         <div className="track-review-content">
           <div className="track-review-album">
-            <div><h2 id="track-album-title">{album.title}</h2><p>{album.artist}{album.year ? ` · ${album.year}` : ''}</p></div>
+            <div><h2 id="track-album-title">{album.title}</h2><p>{displayArtist(t, album.artist)}{album.year ? ` · ${formatNumber(album.year, i18n.resolvedLanguage, { useGrouping: false })}` : ''}</p></div>
             {!manualMode && editions.length > 0 && (
-              <label className="edition-select">Edition
+              <label className="edition-select">{t('trackReview.edition')}
                 <select value={selectedEdition?.id ?? ''} onChange={(event) => setDraft({ editionId: event.target.value, likedTrackIds: [] })}>
-                  {editions.map((edition) => <option key={edition.id} value={edition.id}>{edition.title} · {edition.trackCount} tracks{edition.date ? ` · ${edition.date}` : ''}</option>)}
+                  {editions.map((edition) => <option key={edition.id} value={edition.id}>{t('trackReview.editionOption', {
+                    title: edition.title,
+                    tracks: t('common.track', { count: edition.trackCount }),
+                    date: edition.date ? ` · ${edition.date}` : '',
+                  })}</option>)}
                 </select>
               </label>
             )}
           </div>
 
           {loading ? (
-            <div className="tracklist-skeleton" role="status" aria-label="Loading tracklist"><i /><i /><i /><i /><i /></div>
+            <div className="tracklist-skeleton" role="status" aria-label={t('trackReview.loadingTracklist')}><i /><i /><i /><i /><i /></div>
           ) : manualMode ? (
             <div className="manual-track-summary">
-              <h3>Enter a simple album summary</h3>
-              <p>{error ?? 'Use this when the catalog has no usable edition. Enter how many tracks you like.'}</p>
+              <h3>{t('trackReview.manualTitle')}</h3>
+              <p>{error ? t(`trackReview.${error}`) : t('trackReview.manualHelp')}</p>
               <div>
-                <label>Total tracks<input aria-label="Total tracks" type="number" min="1" max="999" value={manualSummary.trackCount || ''} onChange={(event) => setDraft((current) => ({ ...current, manualSummary: { ...manualSummary, trackCount: Number(event.target.value) } }))} /></label>
-                <label>Liked<input aria-label="Liked tracks" type="number" min="0" max="999" value={manualSummary.likedCount || ''} onChange={(event) => setDraft((current) => ({ ...current, manualSummary: { ...manualSummary, likedCount: Number(event.target.value) } }))} /></label>
+                <label>{t('trackReview.totalTracks')}<input aria-label={t('trackReview.totalTracks')} type="number" min="1" max="999" value={manualSummary.trackCount || ''} onChange={(event) => setDraft((current) => ({ ...current, manualSummary: { ...manualSummary, trackCount: Number(event.target.value) } }))} /></label>
+                <label>{t('trackReview.liked')}<input aria-label={t('trackReview.likedTracks')} type="number" min="0" max="999" value={manualSummary.likedCount || ''} onChange={(event) => setDraft((current) => ({ ...current, manualSummary: { ...manualSummary, likedCount: Number(event.target.value) } }))} /></label>
               </div>
-              {manualError && <p className="field-error" role="alert">{manualError}</p>}
-              {editions.length > 0 && <button className="text-button" type="button" onClick={() => setManualMode(false)}>Use the catalog tracklist</button>}
+              {manualError && <p className="field-error" role="alert">{t(`manualErrors.${manualError}`)}</p>}
+              {editions.length > 0 && <button className="text-button" type="button" onClick={() => setManualMode(false)}>{t('trackReview.useCatalog')}</button>}
             </div>
           ) : selectedEdition ? (
             <ol className="tracklist">
@@ -992,27 +1055,27 @@ function TrackReviewScreen({ collection, run, client, profiles, currentAlbumId, 
                     <span>{track.mediumPosition > 1 ? `${track.mediumPosition}.` : ''}{String(track.position).padStart(2, '0')}</span>
                     <strong>{track.title}</strong>
                     <div>
-                      <button type="button" className={liked ? 'track-like track-like--active' : 'track-like'} aria-label={`${liked ? 'Unlike' : 'Like'} ${track.title}`} aria-pressed={liked} title={liked ? 'Unlike' : 'Like'} onClick={() => toggleLike(track.id)}><span aria-hidden="true">{liked ? '♥' : '♡'}</span></button>
+                      <button type="button" className={liked ? 'track-like track-like--active' : 'track-like'} aria-label={t(liked ? 'trackReview.unlike' : 'trackReview.like', { title: track.title })} aria-pressed={liked} title={t(liked ? 'trackReview.unlikeTitle' : 'trackReview.likeTitle')} onClick={() => toggleLike(track.id)}><span aria-hidden="true">{liked ? '♥' : '♡'}</span></button>
                     </div>
                   </li>
                 )
               })}
             </ol>
           ) : (
-            <div className="manual-track-summary"><p>{error ?? 'No usable tracklist was found for this album.'}</p><button className="button button--small" type="button" onClick={() => setManualMode(true)}>Enter totals manually</button></div>
+            <div className="manual-track-summary"><p>{error ? t(`trackReview.${error}`) : t('trackReview.noTracklist')}</p><button className="button button--small" type="button" onClick={() => setManualMode(true)}>{t('trackReview.enterManual')}</button></div>
           )}
 
           <div className="track-review-tools">
-            {!manualMode && catalog?.hasMore && <button className="text-button" type="button" disabled={loadingMore} onClick={loadMore}>{loadingMore ? 'Loading…' : 'More editions'}</button>}
-            {!manualMode && <button className="text-button" type="button" onClick={() => setManualMode(true)}>Enter totals manually</button>}
+            {!manualMode && catalog?.hasMore && <button className="text-button" type="button" disabled={loadingMore} onClick={loadMore}>{loadingMore ? t('trackReview.loadingMore') : t('trackReview.moreEditions')}</button>}
+            {!manualMode && <button className="text-button" type="button" onClick={() => setManualMode(true)}>{t('trackReview.enterManual')}</button>}
           </div>
           <div className="track-review-actions">
-            <button className="button button--outline" type="button" onClick={() => commit(true)}>Skip unheard album</button>
-            <button className="button button--primary" type="button" disabled={!canCommit} onClick={() => commit(false)}>{index === albums.length - 1 ? 'Finish song review' : 'Save & next album →'}</button>
+            <button className="button button--outline" type="button" onClick={() => commit(true)}>{t('trackReview.skip')}</button>
+            <button className="button button--primary" type="button" disabled={!canCommit} onClick={() => commit(false)}>{index === albums.length - 1 ? t('trackReview.finish') : t('trackReview.saveNext')}</button>
           </div>
         </div>
       </section>
-      <p className="sr-only" aria-live="polite">Reviewing {album.title} by {album.artist}, album {index + 1} of {albums.length}.</p>
+      <p className="sr-only" aria-live="polite">{t('trackReview.reviewing', { title: album.title, artist: displayArtist(t, album.artist), current: formatNumber(index + 1, i18n.resolvedLanguage), total: formatNumber(albums.length, i18n.resolvedLanguage) })}</p>
     </div>
   )
 }
@@ -1030,6 +1093,7 @@ interface ResultsProps {
 }
 
 function ResultsScreen({ collection, run, onHome, onAgain, onUndo, onTrackReview, onWeightChange }: ResultsProps) {
+  const { t, i18n } = useTranslation()
   const albums = run.albumSnapshot ?? collection.albums
   const albumMap = new Map(albums.map((album) => [album.id, album]))
   const heartRanking = (run.finalRanking ?? []).filter((id) => albumMap.has(id))
@@ -1054,27 +1118,32 @@ function ResultsScreen({ collection, run, onHome, onAgain, onUndo, onTrackReview
   return (
     <div className="page results-page constrained-page">
       <div className="results-hero">
-        <p className="eyebrow">The final sequence</p>
-        <h1 aria-label="Your next record is clear.">Your next record<br />is <em>clear.</em></h1>
-        <p>{run.decisions.length} choices shaped this {MODE_DETAILS.find((mode) => mode.id === run.mode)?.name.toLowerCase()} ranking for {collection.name}.</p>
+        <p className="eyebrow">{t('results.eyebrow')}</p>
+        <h1 aria-label={t('results.titleLabel')}>{t('results.titleBefore').split('\n')[0]}<br />{t('results.titleBefore').split('\n')[1]}<em>{t('results.titleEmphasis')}</em></h1>
+        <p>{t('results.summary', {
+          count: run.decisions.length,
+          choices: t('common.choice', { count: run.decisions.length }),
+          mode: modeName(t, run.mode).toLocaleLowerCase(appLocale(i18n.resolvedLanguage)),
+          collection: collection.name,
+        })}</p>
       </div>
 
-      {isLegacy && <div className="legacy-result"><strong>This ranking uses Solitude’s original model.</strong><p>It stays exactly as you finished it. Rank again when you want a Bradley–Terry result.</p></div>}
+      {isLegacy && <div className="legacy-result"><strong>{t('results.legacyTitle')}</strong><p>{t('results.legacyBody')}</p></div>}
 
       {hasTrackEvidence && (
         <div className="result-controls">
-          <div className="result-tabs" role="tablist" aria-label="Ranking view">
-            <button role="tab" type="button" aria-selected={view === 'heart'} onClick={() => setView('heart')}>Heart</button>
-            <button role="tab" type="button" aria-selected={view === 'record'} onClick={() => setView('record')}>Record value</button>
-            <button role="tab" type="button" aria-selected={view === 'balance'} onClick={() => setView('balance')}>Your balance</button>
+          <div className="result-tabs" role="tablist" aria-label={t('results.viewLabel')}>
+            <button role="tab" type="button" aria-selected={view === 'heart'} onClick={() => setView('heart')}>{t('results.heart')}</button>
+            <button role="tab" type="button" aria-selected={view === 'record'} onClick={() => setView('record')}>{t('results.recordValue')}</button>
+            <button role="tab" type="button" aria-selected={view === 'balance'} onClick={() => setView('balance')}>{t('results.balance')}</button>
           </div>
           {view === 'balance' && (
-            <label className="balance-slider">Heart <strong>{Math.round(weight * 100)}%</strong>
-              <input aria-label="Heart weight" type="range" min="0" max="100" value={Math.round(weight * 100)} onChange={(event) => onWeightChange(Number(event.target.value) / 100)} />
-              <span>Songs {Math.round((1 - weight) * 100)}%</span>
+            <label className="balance-slider">{t('results.heart')} <strong>{formatNumber(Math.round(weight * 100), i18n.resolvedLanguage)}%</strong>
+              <input aria-label={t('results.heartWeight')} type="range" min="0" max="100" value={Math.round(weight * 100)} onChange={(event) => onWeightChange(Number(event.target.value) / 100)} />
+              <span>{t('results.songs')} {formatNumber(Math.round((1 - weight) * 100), i18n.resolvedLanguage)}%</span>
             </label>
           )}
-          <p className="result-view-note" aria-live="polite">{view === 'heart' ? 'Album choices only.' : view === 'record' ? 'Song evidence with an eight-track shrinkage prior.' : 'Standardized heart and song evidence, blended live.'}</p>
+          <p className="result-view-note" aria-live="polite">{view === 'heart' ? t('results.heartNote') : view === 'record' ? t('results.recordNote') : t('results.balanceNote')}</p>
         </div>
       )}
 
@@ -1082,41 +1151,46 @@ function ResultsScreen({ collection, run, onHome, onAgain, onUndo, onTrackReview
         {ranking.map((album, index) => (
           <motion.li key={album.id} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: Math.min(index * 0.045, 0.5) }}>
             <span className="rank-number">{String(index + 1).padStart(2, '0')}</span>
-            <AlbumArt src={album.coverUrl} title={album.title} artist={album.artist} />
-            <span><strong>{album.title}</strong><small>{album.artist}{album.year ? ` · ${album.year}` : ''}</small></span>
-            {index === 0 && !hasTrackEvidence && <i className="top-pick">Top pick</i>}
-            {hasTrackEvidence && <small className="ranking-score">{view === 'heart' ? `${(heartScores[album.id] ?? 0).toFixed(2)} heart` : view === 'record' ? `${Math.round((recordScores[album.id] ?? 0) * 100)}% record` : `${(balance[album.id] ?? 0).toFixed(2)} balance`}</small>}
+            <AlbumArt src={album.coverUrl} title={album.title} artist={displayArtist(t, album.artist)} />
+            <span><strong>{album.title}</strong><small>{displayArtist(t, album.artist)}{album.year ? ` · ${formatNumber(album.year, i18n.resolvedLanguage, { useGrouping: false })}` : ''}</small></span>
+            {index === 0 && !hasTrackEvidence && <i className="top-pick">{t('results.topPick')}</i>}
+            {hasTrackEvidence && <small className="ranking-score">{view === 'heart'
+              ? t('results.heartScore', { score: formatNumber(heartScores[album.id] ?? 0, i18n.resolvedLanguage, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) })
+              : view === 'record'
+                ? t('results.recordScore', { score: formatNumber(Math.round((recordScores[album.id] ?? 0) * 100), i18n.resolvedLanguage) })
+                : t('results.balanceScore', { score: formatNumber(balance[album.id] ?? 0, i18n.resolvedLanguage, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) })}</small>}
           </motion.li>
         ))}
       </ol>
 
       {view === 'record' && unreviewedIds.length > 0 && (
-        <section className="unreviewed-results"><h2>Not reviewed</h2><p>These albums stay outside Record value until you review or enter their songs.</p><ul>{unreviewedIds.map((id) => <li key={id}>{albumMap.get(id)?.title}</li>)}</ul></section>
+        <section className="unreviewed-results"><h2>{t('results.notReviewed')}</h2><p>{t('results.notReviewedBody')}</p><ul>{unreviewedIds.map((id) => <li key={id}>{albumMap.get(id)?.title}</li>)}</ul></section>
       )}
 
       {view === 'balance' && disagreements.length > 0 && (
-        <section className="disagreements"><p className="eyebrow">Where heart and songs part ways</p><ul>{disagreements.map((alert) => <li key={`${alert.firstId}:${alert.secondId}`}><strong>{albumMap.get(alert.heartHigherId)?.title}</strong> wins your album battles, while <strong>{albumMap.get(alert.trackHigherId)?.title}</strong> has the stronger song evidence.</li>)}</ul></section>
+        <section className="disagreements"><p className="eyebrow">{t('results.disagreementEyebrow')}</p><ul>{disagreements.map((alert) => <li key={`${alert.firstId}:${alert.secondId}`}>{t('results.disagreement', { heartAlbum: albumMap.get(alert.heartHigherId)?.title, trackAlbum: albumMap.get(alert.trackHigherId)?.title })}</li>)}</ul></section>
       )}
 
       {!isLegacy && !analysis && (
         <section className="track-invitation">
-          <p className="eyebrow">One optional encore</p><h2>Go deeper with the songs?</h2>
-          <p>Select the heart beside tracks you like to reveal Record value and Your balance. Your heart ranking is already complete and will not be replaced.</p>
-          <div><button className="button button--primary" type="button" onClick={onTrackReview}>Review the songs</button><button className="button button--outline" type="button" onClick={onHome}>Keep this ranking</button></div>
+          <p className="eyebrow">{t('results.encore')}</p><h2>{t('results.deeperTitle')}</h2>
+          <p>{t('results.deeperBody')}</p>
+          <div><button className="button button--primary" type="button" onClick={onTrackReview}>{t('results.reviewSongs')}</button><button className="button button--outline" type="button" onClick={onHome}>{t('results.keepRanking')}</button></div>
         </section>
       )}
 
       <div className="results-actions">
-        <button className="button button--primary" type="button" onClick={onAgain}>{isLegacy ? 'Rank again with the new model' : 'Rank again'}</button>
-        {!isLegacy && analysis && <button className="button button--outline" type="button" onClick={onTrackReview}>Review songs</button>}
-        <button className="button button--outline" type="button" onClick={onHome}>Back to collections</button>
-        {!isLegacy && <button className="text-button" type="button" onClick={onUndo}>↶ Undo last choice</button>}
+        <button className="button button--primary" type="button" onClick={onAgain}>{isLegacy ? t('results.rankAgainNew') : t('results.rankAgain')}</button>
+        {!isLegacy && analysis && <button className="button button--outline" type="button" onClick={onTrackReview}>{t('results.reviewSongsShort')}</button>}
+        <button className="button button--outline" type="button" onClick={onHome}>{t('results.backCollections')}</button>
+        {!isLegacy && <button className="text-button" type="button" onClick={onUndo}>{t('results.undo')}</button>}
       </div>
     </div>
   )
 }
 
 export default function App() {
+  const { t } = useTranslation()
   const { state, setState, notice, clearNotice, showNotice } = usePersistentState()
   const [restoredNavigation] = useState(() => loadNavigation(state))
   const [screen, setScreen] = useState<Screen>(restoredNavigation.navigation.screen)
@@ -1130,7 +1204,7 @@ export default function App() {
   const selectedCollection = state.collections.find((collection) => collection.id === selectedCollectionId)
 
   useEffect(() => {
-    if (restoredNavigation.invalid) showNotice('That restored page was no longer valid, so Solitude returned to your library.')
+    if (restoredNavigation.invalid) showNotice('invalidNavigation')
   }, [restoredNavigation.invalid])
 
   useEffect(() => {
@@ -1310,7 +1384,7 @@ export default function App() {
         onRename={(id, name) => updateCollection(id, (collection) => ({ ...collection, name, updatedAt: nowIso() }))}
         onDelete={(id) => {
           const collection = state.collections.find((item) => item.id === id)
-          if (!collection || !window.confirm(`Delete “${collection.name}” and its ranking history?`)) return
+          if (!collection || !window.confirm(t('library.deleteConfirm', { name: collection.name }))) return
           setState((current) => ({ ...current, collections: current.collections.filter((item) => item.id !== id), currentCollectionId: current.currentCollectionId === id ? undefined : current.currentCollectionId }))
           if (selectedCollectionId === id) setSelectedCollectionId(undefined)
         }}
@@ -1321,7 +1395,7 @@ export default function App() {
       />
     )
   } else if (!selectedCollection) {
-    content = <div className="page constrained-page"><h1>Collection not found</h1><button className="button" type="button" onClick={goHome}>Return to library</button></div>
+    content = <div className="page constrained-page"><h1>{t('fallback.collectionMissing')}</h1><button className="button" type="button" onClick={goHome}>{t('fallback.returnLibrary')}</button></div>
   } else if (screen === 'import') {
     content = <ImportScreen collection={selectedCollection} initialDraft={importDraft} initialSwapColumns={swapColumns} onDraftChange={(draft, swap) => { setImportDraft(draft); setSwapColumns(swap) }} onBack={goHome} onContinue={(albums) => { updateCollection(selectedCollection.id, (collection) => ({ ...collection, albums, activeRun: undefined, updatedAt: nowIso() })); setScreen('review') }} />
   } else if (screen === 'review') {
@@ -1338,13 +1412,13 @@ export default function App() {
   } else if (screen === 'mode') {
     content = <ModeScreen collection={selectedCollection} paceSamples={state.learnedPaceSamples} selected={selectedMode} onSelected={setSelectedMode} onBack={() => setScreen('review')} onStart={startRun} />
   } else if (screen === 'battle' && selectedCollection.activeRun) {
-    content = <BattleScreen collection={selectedCollection} run={selectedCollection.activeRun} paceSamples={state.learnedPaceSamples} onChoose={chooseAlbum} onUndo={undoActive} onRestart={() => { if (window.confirm('Restart this run? Your saved choices from this run will be cleared.')) startRun(selectedCollection.activeRun!.mode) }} onExit={goHome} />
+    content = <BattleScreen collection={selectedCollection} run={selectedCollection.activeRun} paceSamples={state.learnedPaceSamples} onChoose={chooseAlbum} onUndo={undoActive} onRestart={() => { if (window.confirm(t('battle.restartConfirm'))) startRun(selectedCollection.activeRun!.mode) }} onExit={goHome} />
   } else if (screen === 'results' && resultRun) {
     content = <ResultsScreen collection={selectedCollection} run={resultRun} onHome={goHome} onAgain={() => setScreen('mode')} onUndo={undoCompleted} onTrackReview={openTrackReview} onWeightChange={updateResultWeight} />
   } else if (screen === 'track-review' && resultRun) {
     content = <TrackReviewScreen collection={selectedCollection} run={resultRun} client={client} profiles={state.trackProfiles} currentAlbumId={trackReviewAlbumId} onCurrentAlbum={setTrackReviewAlbumId} onCommit={commitTrackProfile} onExit={() => setScreen('results')} />
   } else {
-    content = <div className="page constrained-page"><h1>Nothing to resume</h1><button className="button" type="button" onClick={goHome}>Return to library</button></div>
+    content = <div className="page constrained-page"><h1>{t('fallback.nothingResume')}</h1><button className="button" type="button" onClick={goHome}>{t('fallback.returnLibrary')}</button></div>
   }
 
   const darkHeader = screen === 'battle'
@@ -1355,7 +1429,7 @@ export default function App() {
           <Header
             onHome={goHome}
             trailing={screen === 'library'
-              ? <span className="library-save-status">{state.collections.length} {state.collections.length === 1 ? 'collection' : 'collections'} · saved on this device</span>
+              ? <span className="library-save-status">{t('shell.savedStatus', { count: state.collections.length, collections: t('common.collection', { count: state.collections.length }) })}</span>
               : selectedCollection ? <span>{selectedCollection.name}</span> : undefined}
           />
         )}
@@ -1363,7 +1437,7 @@ export default function App() {
           <motion.main key={screen} {...pageMotion}>{content}</motion.main>
         </AnimatePresence>
         {screen !== 'battle' && <Footer />}
-        {notice && <div className="toast" role="status"><span>{notice}</span><button type="button" onClick={clearNotice} aria-label="Dismiss notice">×</button></div>}
+        {notice && <div className="toast" role="status"><span>{t(`notices.${notice}`)}</span><button type="button" onClick={clearNotice} aria-label={t('shell.dismissNotice')}>×</button></div>}
       </div>
     </MotionConfig>
   )

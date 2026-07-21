@@ -14,42 +14,15 @@ export interface BattleState {
   heartScores?: Record<string, number>
 }
 
-export interface ModeDetails {
+export interface RankingModeMetadata {
   id: RankingMode
-  name: string
-  eyebrow: string
-  description: string
-  pro: string
-  con: string
   recommended?: boolean
 }
 
-export const MODE_DETAILS: ModeDetails[] = [
-  {
-    id: 'quick',
-    name: 'Quick',
-    eyebrow: 'A first pressing',
-    description: 'Three seeded round-robin rounds, scored as one connected body of preference evidence.',
-    pro: 'Fastest route to a useful shortlist.',
-    con: 'The middle of the ranking is approximate.',
-  },
-  {
-    id: 'balanced',
-    name: 'Balanced',
-    eyebrow: 'The house favorite',
-    description: 'An adaptive battle that spends its fixed budget on uncertain, under-heard matchups.',
-    pro: 'Excellent balance of speed and confidence.',
-    con: 'Not every possible pair meets directly.',
-    recommended: true,
-  },
-  {
-    id: 'thorough',
-    name: 'Thorough',
-    eyebrow: 'The deep listen',
-    description: 'Every unique pair faces off exactly once.',
-    pro: 'Maximum direct comparison coverage.',
-    con: 'Large collections take a long time.',
-  },
+export const RANKING_MODES: RankingModeMetadata[] = [
+  { id: 'quick' },
+  { id: 'balanced', recommended: true },
+  { id: 'thorough' },
 ]
 
 export function seededRandom(seed: number): () => number {

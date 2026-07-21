@@ -22,12 +22,20 @@ export function estimateRemainingMs(remainingChoices: number, samples: readonly 
   return Math.max(0, remainingChoices) * medianPace(samples)
 }
 
-export function formatDuration(durationMs: number): string {
+export type DurationDescriptor =
+  | { unit: 'seconds'; count: number }
+  | { unit: 'minutes'; count: number }
+  | { unit: 'hours'; count: number }
+  | { unit: 'hoursMinutes'; hours: number; minutes: number }
+
+export function describeDuration(durationMs: number): DurationDescriptor {
   const seconds = Math.max(0, Math.round(durationMs / 1000))
-  if (seconds < 60) return `${seconds} sec`
+  if (seconds < 60) return { unit: 'seconds', count: seconds }
   const minutes = Math.round(seconds / 60)
-  if (minutes < 60) return `${minutes} min`
+  if (minutes < 60) return { unit: 'minutes', count: minutes }
   const hours = Math.floor(minutes / 60)
   const remainder = minutes % 60
-  return remainder ? `${hours} hr ${remainder} min` : `${hours} hr`
+  return remainder
+    ? { unit: 'hoursMinutes', hours, minutes: remainder }
+    : { unit: 'hours', count: hours }
 }

@@ -7,7 +7,14 @@ export interface ParsedLine {
   title: string
   artist: string
   duplicateOf?: number
-  error?: string
+  error?: ParseError
+}
+
+export type ParseErrorCode = 'empty' | 'missingTitle' | 'missingArtist' | 'limit'
+
+export interface ParseError {
+  code: ParseErrorCode
+  values?: { limit: number }
 }
 
 export interface ParseResult {
@@ -37,9 +44,9 @@ export function normalizeValue(value: string): string {
 
 function splitLine(sourceText: string, swapColumns: boolean): Omit<ParsedLine, 'line' | 'sourceText'> {
   const text = sourceText.trim().replace(/\s+/g, ' ')
-  if (!text) return { title: '', artist: '', error: 'Empty line' }
-  if (/^[-–—]\s*/.test(text)) return { title: '', artist: text.replace(/^[-–—]\s*/, ''), error: 'Album title is missing' }
-  if (/\s[-–—]$/.test(text)) return { title: text.replace(/\s[-–—]$/, ''), artist: '', error: 'Artist is missing' }
+  if (!text) return { title: '', artist: '', error: { code: 'empty' } }
+  if (/^[-–—]\s*/.test(text)) return { title: '', artist: text.replace(/^[-–—]\s*/, ''), error: { code: 'missingTitle' } }
+  if (/\s[-–—]$/.test(text)) return { title: text.replace(/\s[-–—]$/, ''), artist: '', error: { code: 'missingArtist' } }
 
   let first = ''
   let second = ''
@@ -65,8 +72,8 @@ function splitLine(sourceText: string, swapColumns: boolean): Omit<ParsedLine, '
 
   const titleOnly = second === 'Unknown artist'
   const [title, artist] = swapColumns && !titleOnly ? [second, first] : [first, second]
-  if (!title.trim()) return { title: '', artist: artist.trim(), error: 'Album title is missing' }
-  if (!artist.trim()) return { title: title.trim(), artist: '', error: 'Artist is missing' }
+  if (!title.trim()) return { title: '', artist: artist.trim(), error: { code: 'missingTitle' } }
+  if (!artist.trim()) return { title: title.trim(), artist: '', error: { code: 'missingArtist' } }
   return { title: title.trim(), artist: artist.trim() }
 }
 
@@ -81,7 +88,7 @@ export function parseAlbumList(input: string, swapColumns = false, limit = 100):
     const parsed = splitLine(sourceText, swapColumns)
     const result: ParsedLine = { line: index + 1, sourceText, ...parsed }
     if (result.error) {
-      if (result.error !== 'Empty line') invalidCount += 1
+      if (result.error.code !== 'empty') invalidCount += 1
       return result
     }
 
@@ -94,7 +101,7 @@ export function parseAlbumList(input: string, swapColumns = false, limit = 100):
     }
 
     if (accepted >= limit) {
-      result.error = `Only the first ${limit} unique albums can be imported`
+      result.error = { code: 'limit', values: { limit } }
       invalidCount += 1
       truncatedCount += 1
       return result

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { appendPaceSample, estimateRemainingMs, formatDuration, medianPace } from './pace'
+import { appendPaceSample, describeDuration, estimateRemainingMs, medianPace } from './pace'
 
 describe('pace estimation', () => {
   it('uses four seconds before it has learned a pace', () => {
@@ -23,8 +23,8 @@ describe('pace estimation', () => {
     for (let index = 1; index <= 30; index += 1) samples = appendPaceSample(samples, index * 100)
     expect(samples).toHaveLength(25)
     expect(samples[0]).toBe(600)
-    expect(formatDuration(42_000)).toBe('42 sec')
-    expect(formatDuration(125_000)).toBe('2 min')
-    expect(formatDuration(3_900_000)).toBe('1 hr 5 min')
+    expect(describeDuration(42_000)).toEqual({ unit: 'seconds', count: 42 })
+    expect(describeDuration(125_000)).toEqual({ unit: 'minutes', count: 2 })
+    expect(describeDuration(3_900_000)).toEqual({ unit: 'hoursMinutes', hours: 1, minutes: 5 })
   })
 })

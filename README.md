@@ -34,6 +34,8 @@ Solitude is a browser-only React app for answering a deceptively hard question: 
 
 Everything runs client-side. There is no backend, no account, no analytics, and no database — your collections live entirely in your browser's `localStorage`.
 
+The interface is bundled in English and Brazilian Portuguese. On each visit without a manual preference, Solitude checks the browser's language list in order: any `pt` locale selects PT-BR, any `en` locale selects English, and unsupported languages fall back to English. The EN / PT-BR control in the header switches immediately without interrupting the current workflow.
+
 ## Demo
 
 The animation above is captured from the application itself. The fictional sleeves keep the repository free of bundled commercial artwork; your own matched Cover Art Archive images appear when you use the app.
@@ -167,6 +169,7 @@ npm run dev
 ## Your Data
 
 - **Storage**: collections, `bt-v1` runs, reusable track profiles, and frozen result snapshots are saved to `localStorage` under `solitude:data:v3`. Search, cover-availability, edition, and tracklist metadata use catalog schema v3 under the stable `solitude:catalog:v2` key with a 30-day expiry.
+- **Language**: a manual EN / PT-BR choice is stored independently under `solitude:language:v1` and takes precedence over browser preferences on later visits. It does not change or migrate collection data.
 - **Refresh restoration**: guarded tab-only navigation is stored in `sessionStorage` under `solitude:navigation:v1`. Corrupt or stale collection/run references return safely to the library with a notice.
 - **Schema changes**: pre-launch data from earlier storage schemas is intentionally discarded instead of migrated.
 - **Artwork cache**: remote Cover Art Archive and custom HTTPS image bytes use browser `CacheStorage`, never `localStorage`. An image-only service worker keeps them for seven days, limits the cache to 250 least-recently-used entries, refreshes expired art, and falls back to stale art if refresh fails. Unsupported or storage-restricted browsers continue with normal `<img>` requests.

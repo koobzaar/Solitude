@@ -5,15 +5,18 @@ export const DATA_STORAGE_KEY = 'solitude:data:v3'
 // The cache key stays stable so v2 search and cover metadata can migrate in place.
 export const CATALOG_STORAGE_KEY = 'solitude:catalog:v2'
 
+export type PersistenceNoticeCode = 'recovered' | 'saveFailed' | 'invalidNavigation'
+export type StorageErrorCode = 'unavailable'
+
 export interface LoadResult {
   state: StoredStateV3
   recovered: boolean
-  notice?: string
+  notice?: PersistenceNoticeCode
 }
 
 export interface SaveResult {
   ok: boolean
-  error?: string
+  error?: StorageErrorCode
 }
 
 export function createInitialState(): StoredStateV3 {
@@ -72,11 +75,8 @@ export function saveState(
   try {
     storage.setItem(DATA_STORAGE_KEY, JSON.stringify(state))
     return { ok: true }
-  } catch (error) {
-    return {
-      ok: false,
-      error: error instanceof Error ? error.message : 'Browser storage is unavailable.',
-    }
+  } catch {
+    return { ok: false, error: 'unavailable' }
   }
 }
 
@@ -114,7 +114,7 @@ export function saveCatalogCache(
   try {
     storage.setItem(CATALOG_STORAGE_KEY, JSON.stringify(cache))
     return { ok: true }
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : 'Catalog cache could not be saved.' }
+  } catch {
+    return { ok: false, error: 'unavailable' }
   }
 }
